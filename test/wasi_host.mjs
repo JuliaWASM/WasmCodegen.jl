@@ -127,4 +127,33 @@ gh.attach({ exports: { memory: growing } });
 }
 check('fd_write growing the memory', gh.imports.wasi_snapshot_preview1.fd_write(1, 0, 2, 16), 0);
 check('written', [grown, new DataView(growing.buffer).getUint32(16, true)], [[[104, 105], [33]], 3]);
+
+// a range outside the memory: EFAULT, nothing written to the stream or the memory
+{
+  const EFAULT = 21, END = memory.buffer.byteLength, out = [];
+  const fh = createHost({ env: { A: '1' }, write: (fd, b) => out.push([fd, ...b]) });
+  fh.attach({ exports: { memory } });
+  const w = fh.imports.wasi_snapshot_preview1;
+  fresh();
+  view().setUint32(0, 100, true); view().setUint32(4, 2, true);          // a good iovec
+  view().setUint32(8, END - 4, true); view().setUint32(12, 100, true);   // its bytes past the end
+  check('fd_write: bytes outside the memory', w.fd_write(1, 0, 2, 16), EFAULT);
+  check('fd_write: iovecs outside the memory', w.fd_write(1, END - 4, 1, 16), EFAULT);
+  check('fd_write: count outside the memory', w.fd_write(1, 0, 1, END - 2), EFAULT);
+  check('fd_write: more iovecs than the memory holds', w.fd_write(1, 0, 0x7fffffff, 16), EFAULT);
+  check('nothing written', out, []);
+  for (const [what, f] of [['fd_read', () => w.fd_read(0, 0, 0, END - 2)], ['random_get', () => w.random_get(END - 4, 100)],
+                           ['random_get, negative', () => w.random_get(-8, 4)],
+                           ['clock_time_get', () => w.clock_time_get(0, 0n, END - 4)], ['clock_res_get', () => w.clock_res_get(0, END - 4)],
+                           ['fd_fdstat_get', () => w.fd_fdstat_get(1, END - 8)], ['fd_filestat_get', () => w.fd_filestat_get(1, END - 8)],
+                           ['args_sizes_get', () => w.args_sizes_get(END - 2, 0)], ['environ_get', () => w.environ_get(END - 2, 0)]]) {
+    check(`${what}: outside the memory`, f(), EFAULT);
+  }
+  // (an error of the host's `write` is not the module's)
+  const failing = createHost({ write: () => { throw new RangeError('host'); } });
+  failing.attach({ exports: { memory } });
+  let thrown = null;
+  try { failing.imports.wasi_snapshot_preview1.fd_write(1, 0, 1, 16); } catch (e) { thrown = e.message; }
+  check('an error of write', thrown, 'host');
+}
 process.stdout.write(failures.map((f) => f + '\n').join(''));

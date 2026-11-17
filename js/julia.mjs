@@ -30,7 +30,7 @@
 //     imports: (host) => ({ mylib: { send: (p, n) => deliver(host.bytes(p, n).slice()) } }),
 //   });
 
-const WASI_EBADF = 8, WASI_EINVAL = 28, WASI_ENOSYS = 52, WASI_ENOTDIR = 54, WASI_ENOTSOCK = 57,
+const WASI_EBADF = 8, WASI_EFAULT = 21, WASI_EINVAL = 28, WASI_ENOSYS = 52, WASI_ENOTDIR = 54, WASI_ENOTSOCK = 57,
   WASI_ENOTSUP = 58, WASI_ESPIPE = 70;
 const FILETYPE_CHARACTER_DEVICE = 2;
 const FDFLAG_APPEND = 1, FDFLAG_NONBLOCK = 4;
@@ -106,6 +106,17 @@ export function createHost({ write, args = [], env = {}, imports = {} } = {}) {
   const environ = cStrings(Object.entries(env).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`));
   let memory = null;
   const view = () => new DataView(memory.buffer);
+  // run `f`, which reads or writes the module's memory at offsets the module gave: WASI's
+  // EFAULT for a range outside the memory (a RangeError of the views), else 0
+  const inMemory = (f) => {
+    try { f(); } catch (e) {
+      if (e instanceof RangeError) return WASI_EFAULT;
+      throw e;
+    }
+    return 0;
+  };
+  // a WASI function that calls nothing but the host's own code: its result, or EFAULT
+  const guest = (f) => (...a) => { let r; return inMemory(() => { r = f(...a); }) || r; };
   const julia = {
     write_byte: (fd, b) => out(fd, Uint8Array.of(b)),
     entropy: () => {
@@ -151,14 +162,20 @@ export function createHost({ write, args = [], env = {}, imports = {} } = {}) {
     environ_get: (ptrs, buf) => strings(environ, ptrs, buf),
     fd_write: onFd((fd, iovs, iovsLen, nwrittenPtr) => {
       if (fd === 0) return WASI_EBADF;
-      let n = 0;
-      // (the memory read again after each write: `write` may grow it)
-      for (let i = 0; i < iovsLen; i++) {
+      // (the bytes copied before any is written: a bad range writes nothing, and `write`
+      // may grow the memory)
+      const chunks = [];
+      const e = inMemory(() => {
         const v = view();
-        const ptr = v.getUint32(iovs + 8 * i, true), len = v.getUint32(iovs + 8 * i + 4, true);
-        out(fd, new Uint8Array(memory.buffer, ptr, len).slice());
-        n += len;
-      }
+        for (let i = 0; i < iovsLen >>> 0; i++) {
+          const ptr = v.getUint32(iovs + 8 * i, true), len = v.getUint32(iovs + 8 * i + 4, true);
+          chunks.push(new Uint8Array(memory.buffer, ptr, len).slice());
+        }
+        v.getUint32(nwrittenPtr, true);
+      });
+      if (e) return e;
+      let n = 0;
+      for (const chunk of chunks) { out(fd, chunk); n += chunk.length; }
       view().setUint32(nwrittenPtr, n, true);
       return 0;
     }),
@@ -238,6 +255,10 @@ export function createHost({ write, args = [], env = {}, imports = {} } = {}) {
     // (its directory's descriptor is its third argument)
     path_symlink: (oldPath, oldLen, fd) => (isStdio(fd) ? WASI_ENOTDIR : WASI_EBADF),
   };
+  // (`fd_write` checks its ranges itself: it calls `write`, whose errors are the host's)
+  for (const name of Object.keys(wasi)) {
+    if (name !== 'fd_write' && name !== 'proc_exit') wasi[name] = guest(wasi[name]);
+  }
   for (const name of WASI_FUNCTIONS) {
     if (name in wasi) continue;
     // a path is relative to a directory's descriptor: none is open; no stream is a socket
