@@ -619,6 +619,13 @@ function jacobi_svd_scale!(X::Matrix{T}) where {T}
     return e
 end
 
+# the singular value s of the matrix scaled by 2^e, of the matrix itself: one that rounding
+# alone took past the scaled largest number is the largest number, not infinite
+function jacobi_svd_unscale(s::T, e::Int) where {T}
+    x = ldexp(s, -e)
+    return isinf(x) && s <= nextfloat(ldexp(floatmax(T), e)) ? floatmax(T) : x
+end
+
 # the norm of the column j of G, of elements scaled by its largest: their squares neither
 # overflow nor underflow
 function column_norm(G::Matrix{T}, j::Int) where {T}
@@ -835,8 +842,7 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     end
     sv = T[finite ? column_norm(G, j) : T(NaN) for j in 1:q]
     perm = sortperm(sv; rev=true)
-    # (a norm within its rounding of the largest number does not scale back to infinity)
-    S = T[min(ldexp(sv[perm[j]], -e), floatmax(T)) for j in 1:k]
+    S = T[jacobi_svd_unscale(sv[perm[j]], e) for j in 1:k]
     # the left vectors of G (normalized columns, completed to an orthonormal basis), the right
     # ones V; for Aᵀ they swap
     fulll, fullr = tall ? (fullu, fullv) : (fullv, fullu)
