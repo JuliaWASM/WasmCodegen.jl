@@ -137,6 +137,8 @@ la_svd_range(x::Float64, y::Float64) = (F = svd([x 0.0; 0.0 y]); (F.S[1] / x, F.
 # that is not orthogonal to the other; many more rows than columns
 la_svd_small() = (e = eps(); F = svd([1.0 e; 0.0 e^2 / 2]); (F.S[1], F.S[2] / e^2, la_svd_orth(F)...))
 la_svd_near(y::Float64) = (F = svd([1.0 y; 1.0 2y]); (F.S[1], F.S[2] / y, la_svd_orth(F)...))
+la_svd_mixed(y::Float32) = (A = Float32[3 -4 -5; 4 -5 0; 1 -2 -4]; A[:, 2:3] .*= y; F = svd(A);
+                            (isapprox(F.S[1], 5.0990195f0; rtol=1f-5), all(<(1f-5), la_svd_orth(F))))
 la_svd_stuck() = (F = svd([1.0 nextfloat(0.0); 1.0 0.0]); (F.S[1], la_svd_orth(F)...))
 la_svd_long(n::Int) = (A = zeros(Float32, n, 2); A[1, 1] = 1; A[1, 2] = 0.1f0; A[2, 2] = 1; F = svd(A);
                        (round(Float64(F.S[1]); digits=4), round(Float64(F.S[2]); digits=4)))
@@ -210,8 +212,10 @@ end
     @wtest_approx la_svd_range(1e200, 1e-200)
     @wtest_approx la_svd_small()
     @wtest_approx la_svd_near(1e-300)
+    @wtest_approx la_svd_near(1e-308)
     @wtest_approx la_svd_stuck()
     @wtest_approx la_svd_long(1_000_000)
+    @wtest la_svd_mixed(1f-38)
     for x in (1f-40, 1f-30)
         @wtest_approx la_svd_tiny32(x)
     end

@@ -748,6 +748,7 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     e = jacobi_svd_scale!(G)
     # (the cosine of two columns that counts as none, as LAPACK's `gesvj`)
     tol = eps(T) * sqrt(T(p))
+    tiny = nextfloat(zero(T))
     converged = !finite
     for sweep in 1:(finite ? sweeps : 0)
         rotated = false
@@ -760,29 +761,18 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
             for i in 1:p
                 g += (G[i, a] / na) * (G[i, b] / nb)
             end
-            abs(g) <= tol && continue
+            # (and what the cosine of a column of subnormal elements, multiples of `tiny`, is
+            # known to)
+            abs(g) <= tol + 2 * sqrt(T(p)) * tiny / min(na, nb) && continue
             r = nb <= na ? nb / na : na / nb
             if r <= eps(T)
                 # a column negligible beside the other (the ratio of their norms may
                 # underflow): the rotation leaves the large one as it is, to rounding, and
-                # takes from the small one its projection on it. A column of elements too
-                # small to hold the difference (near subnormal) is projected again; one that
-                # is no closer to orthogonal then is none
+                # takes from the small one its projection on it
                 big, small = nb <= na ? (a, b) : (b, a)
                 nbig, nsmall = max(na, nb), min(na, nb)
-                gs = g
-                for again in 1:3
-                    for i in 1:p
-                        G[i, small] -= (gs * nsmall) * (G[i, big] / nbig)
-                    end
-                    nsmall = column_norm(G, small)
-                    (nsmall == 0 || nsmall >= floatmin(T) / eps(T)) && break
-                    gs = zero(T)
-                    for i in 1:p
-                        gs += (G[i, small] / nsmall) * (G[i, big] / nbig)
-                    end
-                    abs(gs) <= tol && break
-                    again == 3 && (G[:, small] .= zero(T))
+                for i in 1:p
+                    G[i, small] -= (g * nsmall) * (G[i, big] / nbig)
                 end
                 for i in 1:q
                     vbig, vsmall = V[i, big], V[i, small]
@@ -819,35 +809,46 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     # ones V; for Aᵀ they swap
     fulll, fullr = tall ? (fullu, fullv) : (fullv, fullu)
     L = zeros(T, p, fulll ? p : k)
+    # (a column of subnormal elements is orthogonal to the others only to their precision:
+    # its vector is completed as well, from its direction)
+    done = falses(size(L, 2))
     for j in 1:k
         c = perm[j]
         sv[c] > 0 || continue
         # (normalized again: the norm of a column of subnormal elements is rounded)
         L[:, j] .= view(G, :, c) ./ sv[c]
         L[:, j] ./= column_norm(L, j)
+        done[j] = sv[c] >= 2 * floatmin(T)
     end
     ncols = size(L, 2)
-    for j in 1:ncols
-        sv_j = j <= k ? sv[perm[j]] : zero(T)
-        (j <= k && sv_j > 0) && continue
-        # the unit vector farthest from the span of the other columns (one of them is not in
-        # it), orthogonal to them (Gram-Schmidt, twice)
-        far, at = -one(T), 1
-        for i in 1:p
-            d = one(T)
-            for r in 1:ncols
-                r == j || (d -= L[i, r]^2)
-            end
-            d > far && ((far, at) = (d, i))
-        end
-        v = zeros(T, p); v[at] = one(T)
+    # v orthogonal to the columns that are done (Gram-Schmidt, twice), and what is left of it
+    function rest!(v::Vector{T})
         for _ in 1:2, r in 1:ncols
-            r == j && continue
+            done[r] || continue
             d = sum(i -> L[i, r] * v[i], 1:p)
             v .-= d .* view(L, :, r)
         end
-        nv = sqrt(sum(abs2, v))
+        return sqrt(sum(abs2, v))
+    end
+    for j in 1:ncols
+        done[j] && continue
+        v = L[:, j]
+        nv = rest!(v)
+        if !(nv > T(0.5))
+            # the unit vector farthest from the span of the columns done (one is not in it)
+            far, at = -one(T), 1
+            for i in 1:p
+                d = one(T)
+                for r in 1:ncols
+                    done[r] && (d -= L[i, r]^2)
+                end
+                d > far && ((far, at) = (d, i))
+            end
+            fill!(v, zero(T)); v[at] = one(T)
+            nv = rest!(v)
+        end
         nv > 0 && (L[:, j] .= v ./ nv)
+        done[j] = true
     end
     R = zeros(T, q, fullr ? q : k)
     for j in 1:size(R, 2)
