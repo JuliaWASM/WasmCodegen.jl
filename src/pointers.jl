@@ -359,11 +359,17 @@ function store_owner!(fc::FnCtx, p::CGVal, byte, off::Int, leaf::LeafVal)
     return
 end
 
-# the MemoryRef of the element at the byte offset of the origin, plus `i - 1` elements
+# the MemoryRef of the element at the byte offset of the origin, plus `i - 1` elements (a
+# trap when the offset is not at an element)
 function element_ref!(fc::FnCtx, o::PtrOrigin, i::CGVal, @nospecialize(T))
     R = MemoryRef{o.eltype}
     sz = elem_unit(o.eltype)
     idx = new_local!(fc, I32)
+    if sz > 1
+        # between two elements: their bytes are not addressable
+        push_leaf!(fc, o.index); emit!(fc.b, :i32_const, sz); emit!(fc.b, :i32_rem_u)
+        if!(fc.b); unreachable!(fc.b); end!(fc.b)
+    end
     push_leaf!(fc, o.index); emit!(fc.b, :i32_const, sz); emit!(fc.b, :i32_div_u)
     push_val!(fc, convert_repr(fc, i, Int)); emit!(fc.b, :i32_wrap_i64)
     emit!(fc.b, :i32_add); emit!(fc.b, :i32_const, 1); emit!(fc.b, :i32_sub)
