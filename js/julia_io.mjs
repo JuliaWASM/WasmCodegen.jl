@@ -222,7 +222,8 @@ function makeMemory(initial) {
   }
   function view() { mem(); return new DataView(memory.buffer); }
   function checkRange(off, len, align = 1) {
-    off >>>= 0; len >>>= 0;
+    // (a length is an i32 of the module, or a product of one: unsigned, and not wrapped to 32 bits)
+    off >>>= 0; if (len < 0) len >>>= 0;
     if (off % align) throw new GuestError(E.INVAL, `offset ${off} is not ${align}-byte aligned`);
     if (off + len > mem().byteLength) throw new GuestError(E.INVAL, `range [${off}, ${off + len}) outside linear memory`);
     return [off, len];

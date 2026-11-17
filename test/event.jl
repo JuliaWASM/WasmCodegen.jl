@@ -291,6 +291,8 @@ using .EventTests: EventTests as EV
         end
         @test e isa WasmCodegen.UnsupportedConstructs && occursin("host_extensions = [:julia_io]", sprint(showerror, e))
     end
+    # the host's `poll` on ranges outside the module's memory (of a size no i32 too): EINVAL
+    @test read(`$(node_cmd()) $(jspi_flags()) $(joinpath(@__DIR__, "poll_host.mjs"))`, String) == ""
 end
 
 @testset "host file modes: julia_io (path_mode, path_chmod, path_symlink)" begin
