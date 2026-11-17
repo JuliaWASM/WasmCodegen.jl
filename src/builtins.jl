@@ -389,11 +389,13 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         # (the errors of the C runtime, in its order: an immutable value, the index, a const field;
         # an ordering is checked before them)
         ordered() = length(args) == 3 || unsupported("setfield! with an ordering, of a value of type ", T)
+        T === Module && ordered() &&
+            return throw_error!(fc, Runtime.throw_error_message, const_value(fc, "cannot assign variables in other modules"))
         T isa DataType && isconcretetype(T) && !ismutabletype(T) && ordered() &&
             return throw_error!(fc, Runtime.throw_error_message,
                                 const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
-        # (of a module, natively another error, before the index's)
-        bad_field_index(idx.typ) && typeintersect(T, Module) === Union{} && ordered() &&
+        # (of a value whose type is not known, natively the errors above may come first)
+        bad_field_index(idx.typ) && T isa DataType && isconcretetype(T) && ordered() &&
             return field_index_error!(fc, :setfield!, idx)
         isconstant(idx) || unsupported("setfield! with a field not known at compile time")
         is_no_field(T, constant_value(idx)) && return no_field!(fc, T, constant_value(idx))

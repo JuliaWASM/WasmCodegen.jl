@@ -532,6 +532,9 @@ function rb_setconst(i::Int)
     (r, r2, c.a, c.b)
 end
 rb_setimm(i::Int) = try setfield!(rb_op(RBImm(i))::RBImm, :a, 5)::Int catch e; rb_err(e) end
+rb_setmod(i::Int) = try setfield!(Base, i % Int32, 5)::Int catch e; rb_err(e) end
+rb_setmod_c(i::Int) = try setfield!(Base, Int32(1), i)::Int catch e; rb_err(e) end
+rb_setmod_s(i::Int) = try setfield!(Base, :rb_nothing, i)::Int catch e; rb_err(e) end
 rb_settuple(i::Int) = try setfield!(rb_op((i, 2))::Tuple{Int,Int}, 1, 5)::Int catch e; rb_err(e) end
 rb_sub(i::Int) = (x = rb_op(i == 1 ? 1 : i == 2 ? Vararg{Int} : i == 3 ? Int : String); try (x <: Integer) ? 1 : 0 catch e; rb_err(e) end)
 rb_sub_r(i::Int) = (x = rb_op(i == 1 ? 1 : i == 3 ? Int : Real); try (Int <: x) ? 1 : 0 catch e; rb_err(e) end)
@@ -554,7 +557,7 @@ rb_bfloat(a::UInt16, b::UInt16) = reinterpret(UInt16, Base.add_float(reinterpret
     for n in (0, 3); @wtest rb_sizeof(n); end
     # a field index that is neither an Int nor a Symbol, a const field, an immutable value
     for f in (rb_getfield, rb_getfield_mod, rb_getfield_anymod, rb_getfield_c, rb_getfield_b, rb_getfield_any, rb_isdefined, rb_isdefined_ok, rb_fieldtype,
-              rb_fieldtype_ok, rb_setfield_idx, rb_setconst, rb_setimm, rb_settuple)
+              rb_fieldtype_ok, rb_setfield_idx, rb_setconst, rb_setimm, rb_settuple, rb_setmod, rb_setmod_c, rb_setmod_s)
         @eval @wtest $f(1)
     end
     @wtest rb_isdefined_ok(2); @wtest rb_fieldtype_ok(2)
