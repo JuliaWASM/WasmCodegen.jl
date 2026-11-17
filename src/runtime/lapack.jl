@@ -622,16 +622,27 @@ end
 # the norm of the column j of G, of elements scaled by its largest: their squares neither
 # overflow nor underflow
 function column_norm(G::Matrix{T}, j::Int) where {T}
-    m = zero(T)
-    for i in axes(G, 1)
-        m = max(m, abs(G[i, j]))
-    end
+    m = maximum(abs, view(G, :, j); init=zero(T))
     m == 0 && return m
-    s = zero(T)
+    # (summed pairwise, as `sum`: a long column of small elements is not rounded away)
+    return m * sqrt(sum(x -> (x / m)^2, view(G, :, j)))
+end
+
+# the sum of the magnitudes of the elements of the column j of G, over n
+column_sum(G::Matrix{T}, j::Int, n::T) where {T} = sum(x -> abs(x / n), view(G, :, j))
+
+# the cosine of the angle of the columns a and b of G, of norms na and nb; summed with
+# compensation (Neumaier's): the rounding of the terms of long columns does not add up to
+# an angle
+function column_cos(G::Matrix{T}, a::Int, b::Int, na::T, nb::T) where {T}
+    s = c = zero(T)
     for i in axes(G, 1)
-        s += (G[i, j] / m)^2
+        x = (G[i, a] / na) * (G[i, b] / nb)
+        t = s + x
+        c += abs(s) >= abs(x) ? (s - t) + x : (x - t) + s
+        s = t
     end
-    return m * sqrt(s)
+    return s + c
 end
 
 # the sweeps of rotations after which Jacobi's methods give up (they converge quadratically:
@@ -748,7 +759,6 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     e = jacobi_svd_scale!(G)
     # (the cosine of two columns that counts as none, as LAPACK's `gesvj`)
     tol = eps(T) * sqrt(T(p))
-    tiny = nextfloat(zero(T))
     converged = !finite
     for sweep in 1:(finite ? sweeps : 0)
         rotated = false
@@ -757,18 +767,20 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
             # of small elements has squares that underflow)
             na, nb = column_norm(G, a), column_norm(G, b)
             (na == 0 || nb == 0) && continue
-            g = zero(T)
-            for i in 1:p
-                g += (G[i, a] / na) * (G[i, b] / nb)
+            g = column_cos(G, a, b, na, nb)
+            # (and, of a column of subnormal elements, what their rounding to multiples of the
+            # smallest leaves of it)
+            lim = tol
+            if min(na, nb) < floatmin(T)
+                sa, sb = column_sum(G, a, na), column_sum(G, b, nb)
+                tiny = nextfloat(zero(T))
+                lim += (tiny / nb) * sa + (tiny / na) * sb
             end
-            # (and what the cosine of a column of subnormal elements, multiples of `tiny`, is
-            # known to)
-            abs(g) <= tol + 2 * sqrt(T(p)) * tiny / min(na, nb) && continue
+            abs(g) <= lim && continue
             r = nb <= na ? nb / na : na / nb
-            if r <= eps(T)
-                # a column negligible beside the other (the ratio of their norms may
-                # underflow): the rotation leaves the large one as it is, to rounding, and
-                # takes from the small one its projection on it
+            if r < floatmin(T)
+                # the ratio of the norms underflows: the rotation leaves the large column as
+                # it is and takes from the small one its projection on it (as `gesvj`'s)
                 big, small = nb <= na ? (a, b) : (b, a)
                 nbig, nsmall = max(na, nb), min(na, nb)
                 for i in 1:p
@@ -782,9 +794,12 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
                 rotated = true
                 continue
             end
-            # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms
+            # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms; where it is large
+            # (a column small beside the other: it may overflow), the tangent is 1 / 2zeta,
+            # of the ratio itself (as `gesvj`'s)
             zeta = (nb <= na ? r - inv(r) : inv(r) - r) / (2g)
-            t = copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
+            t = abs(zeta) * sqrt(eps(T)) > 1 ? g * r / (nb <= na ? r^2 - one(T) : one(T) - r^2) :
+                copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
             t == 0 && continue
             rotated = true
             c = one(T) / sqrt(one(T) + t^2)

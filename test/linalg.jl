@@ -142,6 +142,11 @@ la_svd_mixed(y::Float32) = (A = Float32[3 -4 -5; 4 -5 0; 1 -2 -4]; A[:, 2:3] .*=
 la_svd_stuck() = (F = svd([1.0 nextfloat(0.0); 1.0 0.0]); (F.S[1], la_svd_orth(F)...))
 la_svd_long(n::Int) = (A = zeros(Float32, n, 2); A[1, 1] = 1; A[1, 2] = 0.1f0; A[2, 2] = 1; F = svd(A);
                        (round(Float64(F.S[1]); digits=4), round(Float64(F.S[2]); digits=4)))
+# (columns that are orthogonal: the rounding of their product's many terms is no rotation left)
+la_svd_rows(n::Int) = (F = svd(repeat(Float64[2 5; 1 4; 2 -7], inner=(n, 1))); (F.S[1], F.S[2]))
+# (a long column of elements small beside one: their squares are not rounded away)
+la_svd_tail(n::Int) = (A = reshape(vcat(zeros(Float32, 1023), 1f0, fill(2f0^-12, n)), :, 1); F = svd(A);
+                       (round(Float64(F.S[1]); digits=5), round(Float64(sum(abs2, F.U)); digits=4)))
 la_svd_tall(n::Int) = (A = wmat(n + 6, 2, 0.3); F = svd(A); G = svd(A; full=true);
                        (F.S[1], F.S[2], Float64(size(F.U, 2)), Float64(size(G.U, 2)), sum(abs.(F.U)),
                         sum(abs.(G.U[:, 1:2])), sum(abs.(G.U' * G.U)), sum(abs.(G.Vt)), sum(abs.(F.U * Diagonal(F.S) * F.Vt - A))))
@@ -216,6 +221,8 @@ end
     @wtest_approx la_svd_stuck()
     @wtest_approx la_svd_long(1_000_000)
     @wtest la_svd_mixed(1f-38)
+    @wtest_approx la_svd_rows(100)
+    @wtest_approx la_svd_tail(64512)
     for x in (1f-40, 1f-30)
         @wtest_approx la_svd_tiny32(x)
     end
