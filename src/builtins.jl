@@ -395,8 +395,11 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
             return throw_error!(fc, Runtime.throw_error_message,
                                 const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
         # (of a value whose type is not known, natively the errors above may come first)
-        bad_field_index(idx.typ) && T isa DataType && isconcretetype(T) && ordered() &&
+        if bad_field_index(idx.typ)
+            (T isa DataType && isconcretetype(T) && ordered()) ||
+                unsupported("setfield! with a field of type ", idx.typ, " of a value of type ", T)
             return field_index_error!(fc, :setfield!, idx)
+        end
         isconstant(idx) || unsupported("setfield! with a field not known at compile time")
         is_no_field(T, constant_value(idx)) && return no_field!(fc, T, constant_value(idx))
         i = field_index(T, constant_value(idx))
