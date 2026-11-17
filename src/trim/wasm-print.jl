@@ -20,5 +20,14 @@ let file = joinpath(Sys.BINDIR, Base.DATAROOTDIR, "julia", "base", "strings", "i
         (Meta.isexpr(ex, :function) || Meta.isexpr(ex, :(=))) && ex.args[1] in sigs && push!(found, ex)
     end
     length(found) == length(sigs) || error("wasm-print.jl: not every printing method found in $file")
+    # (the sources are those of the Base that is loaded: each definition is a method of its
+    # function at its line)
+    for def in found
+        line = (def.args[2].args[1]::LineNumberNode).line
+        f = getfield(Base, def.args[1].args[1])
+        any(m -> m.line == line && endswith(String(m.file), "io.jl"), methods(f)) ||
+            error("wasm-print.jl: `$(def.args[1])` at $file:$line is not a method of the loaded Base " *
+                  "(the sources of the Julia installation differ from its system image)")
+    end
     foreach(def -> Core.eval(Base, def), found)
 end
