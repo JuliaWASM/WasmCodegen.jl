@@ -634,32 +634,28 @@ end
 # the sum of the magnitudes of the elements of the column j of G, over n
 column_sum(G::Matrix{T}, j::Int, n::T) where {T} = sum(x -> abs(x / n), view(G, :, j))
 
-# the cosine of the angle of the columns a and b of G, of norms na and nb; summed with
-# compensation (Neumaier's): the rounding of the terms of long columns does not add up to
-# an angle
-function column_cos(G::Matrix{T}, a::Int, b::Int, na::T, nb::T) where {T}
-    s = c = zero(T)
-    for i in axes(G, 1)
-        x = (G[i, a] / na) * (G[i, b] / nb)
-        t = s + x
-        c += abs(s) >= abs(x) ? (s - t) + x : (x - t) + s
-        s = t
-    end
-    return clamp(s + c, -one(T), one(T))
-end
+# the exponent of the power of two that scales a column of norm n to about one (and not
+# beyond what is a number, of a subnormal norm)
+column_exponent(n::T) where {T} = max(exponent(n), exponent(floatmin(T)) + 1)
 
-# the squares of the norms of the columns a and b of G and their product (compensated, as
-# `column_cos`'s)
-function column_dots(G::Matrix{T}, a::Int, b::Int) where {T}
-    alpha = beta = s = c = zero(T)
+# the squares of the norms of the columns a and b of G and their product, of elements scaled
+# by ca and cb (powers of two: nothing is rounded, and no square underflows or overflows),
+# each summed with compensation (Neumaier's): the rounding of the terms of long columns
+# does not add up to an angle
+function column_dots(G::Matrix{T}, a::Int, b::Int, ca::T, cb::T) where {T}
+    alpha = beta = gamma = zero(T)
+    ra = rb = rg = zero(T)
     for i in axes(G, 1)
-        alpha += G[i, a]^2; beta += G[i, b]^2
-        x = G[i, a] * G[i, b]
-        t = s + x
-        c += abs(s) >= abs(x) ? (s - t) + x : (x - t) + s
-        s = t
+        x, y = G[i, a] * ca, G[i, b] * cb
+        alpha, ra = compensated(alpha, ra, x^2)
+        beta, rb = compensated(beta, rb, y^2)
+        gamma, rg = compensated(gamma, rg, x * y)
     end
-    return alpha, beta, s + c
+    return alpha + ra, beta + rb, gamma + rg
+end
+function compensated(s::T, r::T, x::T) where {T}
+    t = s + x
+    return t, r + (abs(s) >= abs(x) ? (s - t) + x : (x - t) + s)
 end
 
 # the sweeps of rotations after which Jacobi's methods give up (they converge quadratically:
@@ -776,60 +772,49 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     e = jacobi_svd_scale!(G)
     # (the cosine of two columns that counts as none, as LAPACK's `gesvj`)
     tol = eps(T) * sqrt(T(p))
-    # (the norms of columns whose elements' squares neither underflow nor overflow)
-    lo, hi = sqrt(floatmin(T) / eps(T)), sqrt(floatmax(T)) / 2
     converged = !finite
     for sweep in 1:(finite ? sweeps : 0)
         rotated = false
         for b in 2:q, a in 1:b-1
             na, nb = column_norm(G, a), column_norm(G, b)
             (na == 0 || nb == 0) && continue
+            # (of each column scaled to a norm of about one: the columns are 2^d apart)
+            ea, eb = column_exponent(na), column_exponent(nb)
+            d = eb - ea
+            alpha, beta, gamma = column_dots(G, a, b, ldexp(one(T), -ea), ldexp(one(T), -eb))
+            # (a column of subnormal elements is orthogonal to another to what their
+            # rounding to multiples of the smallest leaves of it)
+            lim = tol
+            if min(na, nb) < floatmin(T)
+                sa, sb = column_sum(G, a, na), column_sum(G, b, nb)
+                tiny = nextfloat(zero(T))
+                lim += (tiny / nb) * sa + (tiny / na) * sb
+            end
+            (gamma == 0 || abs(gamma) <= lim * (sqrt(alpha) * sqrt(beta))) && continue
+            zeta = (ldexp(beta, d) - ldexp(alpha, -d)) / (2gamma)
             t = zero(T)
-            if lo <= min(na, nb) && max(na, nb) <= hi && min(na, nb) > eps(T) * max(na, nb)
-                # columns of ordinary norms: of the products of the elements themselves
-                # (which round nothing of elements that are small integers)
-                alpha, beta, gamma = column_dots(G, a, b)
-                (gamma == 0 || abs(gamma) <= tol * (sqrt(alpha) * sqrt(beta))) && continue
-                zeta = (beta - alpha) / (2gamma)
+            if abs(zeta) * sqrt(eps(T)) <= 1
                 t = copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
             else
-                # (otherwise of scaled elements: the squares of small or large elements
-                # underflow or overflow)
-                g = column_cos(G, a, b, na, nb)
-                # (and, of a column of subnormal elements, what their rounding to multiples
-                # of the smallest leaves of it)
-                lim = tol
-                if min(na, nb) < floatmin(T)
-                    sa, sb = column_sum(G, a, na), column_sum(G, b, nb)
-                    tiny = nextfloat(zero(T))
-                    lim += (tiny / nb) * sa + (tiny / na) * sb
-                end
-                abs(g) <= lim && continue
-                r = nb <= na ? nb / na : na / nb
-                if r < floatmin(T)
-                    # the ratio of the norms underflows: the rotation leaves the large column
-                    # as it is and takes from the small one its projection on it (as
-                    # `gesvj`'s)
-                    big, small = nb <= na ? (a, b) : (b, a)
-                    nbig, nsmall = max(na, nb), min(na, nb)
+                # zeta is large (a column small beside the other: it may overflow): the
+                # tangent is 1 / 2zeta (as `gesvj`'s), tau over the 2^|d| of the columns
+                tau = gamma / (d >= 0 ? beta - ldexp(alpha, -2d) : ldexp(beta, 2d) - alpha)
+                t = ldexp(tau, -abs(d))
+                if abs(t) < floatmin(T)
+                    # it underflows: the rotation leaves the large column as it is and takes
+                    # from the small one its projection on it
                     for i in 1:p
-                        G[i, small] -= (g * nsmall) * (G[i, big] / nbig)
+                        d >= 0 ? (G[i, a] -= tau * ldexp(G[i, b], -d)) :
+                                 (G[i, b] += tau * ldexp(G[i, a], d))
                     end
                     for i in 1:q
-                        vbig, vsmall = V[i, big], V[i, small]
-                        V[i, small] = vsmall - (g * r) * vbig
-                        V[i, big] = vbig + (g * r) * vsmall
+                        va, vb = V[i, a], V[i, b]
+                        V[i, a] = va - t * vb
+                        V[i, b] = vb + t * va
                     end
                     rotated = true
                     continue
                 end
-                # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms; where it is
-                # large (a column small beside the other: it may overflow), the tangent is
-                # 1 / 2zeta, of the ratio itself (as `gesvj`'s)
-                zeta = (nb <= na ? r - inv(r) : inv(r) - r) / (2g)
-                t = abs(zeta) * sqrt(eps(T)) <= 1 ?
-                    copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta)) :
-                    g * r / (nb <= na ? r^2 - one(T) : one(T) - r^2)
             end
             t == 0 && continue
             rotated = true
