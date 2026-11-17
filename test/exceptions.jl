@@ -382,7 +382,24 @@ function memoryref_index(i)
     end
 end
 
+# (an index whose type inference does not know; of 1.13's form from a Memory too)
+function memoryref_index_any(i)
+    j = Base.inferencebarrier(i)
+    try
+        m = Memory{Int}(undef, 2)
+        m[2] = 7
+        r = Core.memoryrefnew(Core.memoryrefnew(m), j, true)
+        @static VERSION >= v"1.13-" && (r = Core.memoryrefnew(m, j, true))
+        return Core.memoryrefget(r, :not_atomic, true)
+    catch e
+        return e isa TypeError && e.func === :memoryrefnew && e.expected === Int && e.got === i ? 1 : 2
+    end
+end
+
 @testset "exceptions" begin
+    for i in (UInt64(2), 2, 0x02, 3)
+        @wtest memoryref_index_any(i)
+    end
     @wtest memoryref_index(UInt64(1))
     @wtest memoryref_index(1)
     @wtest memoryref_index(0x01)
