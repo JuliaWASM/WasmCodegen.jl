@@ -44,12 +44,27 @@ end
 """
     emit_subtype!(fc, a, b) -> CGVal
 
-`a <: b` of two types. Types are not made at run time: the type objects of the module are
-those of its image, and the subtyping of each pair of them is a table computed when the
-module is finished (`finish_subtype!`), which a helper looks up.
+`a <: b` of two types (of a value that is not one, a TypeError). Types are not made at run
+time: the type objects of the module are those of its image, and the subtyping of each pair
+of them is a table computed when the module is finished (`finish_subtype!`), which a helper
+looks up.
 """
 function emit_subtype!(fc::FnCtx, a::CGVal, b::CGVal)
-    isconstant(a) && isconstant(b) && return const_value(fc, constant_value(a) <: constant_value(b))
+    isconstant(a) && isconstant(b) && constant_value(a) isa Type && constant_value(b) isa Type &&
+        return const_value(fc, constant_value(a) <: constant_value(b))
+    # (a value that is not a type: a TypeError, as natively, of the first)
+    for x in (a, b)
+        x.typ <: Type && continue
+        t = emit_isa!(fc, x, Type)
+        notype() = throw_error!(fc, Runtime.throw_builtin_type_error, const_value(fc, :<:),
+                                () -> convert_repr(fc, const_value(fc, Type), Any), () -> convert_repr(fc, x, Any))
+        if isconstant(t)
+            constant_value(t) || return notype()
+        else
+            push_val!(fc, t); emit!(fc.b, :i32_eqz)
+            if!(fc.b); notype(); end!(fc.b)
+        end
+    end
     f = get!(fc.cgm.helpers, :subtype) do
         jl = jlvalue_ref(fc.cgm.types)
         add_func!(fc.cgm.mod, "jl_subtype", ValType[jl, jl], ValType[I32])
