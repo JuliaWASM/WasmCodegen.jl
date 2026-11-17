@@ -208,6 +208,19 @@ function owner_memory_misaligned(k::Int)
         return Int(unsafe_load(pointer(v) + 1) == C_NULL)
     end
 end
+# (clearing an element of a memory of references: at the element only)
+function clear_ref_misaligned(k::Int)
+    v = Any[Ref(1), Ref(2)]
+    GC.@preserve v unsafe_store!(Ptr{Ptr{Cvoid}}(pointer(v)) + k, C_NULL)
+    return Int(isassigned(v, 1)) + 2Int(isassigned(v, 2))
+end
+# (a pointer between two elements passed to a call that does not access it)
+import LinearAlgebra
+function blas_empty_misaligned(k::Int)
+    a = [1.0, 2.0]; b = [3.0, 4.0]
+    GC.@preserve a b LinearAlgebra.BLAS.blascopy!(0, pointer(a) + k, 1, pointer(b), 1)
+    return b[1] + b[2]
+end
 # the bytes of an address stored otherwise (as an integer, byte by byte) carry no owner: the
 # field's pointer can be read and compared, not dereferenced
 function owner_bytes(k::Int)
@@ -259,6 +272,11 @@ sha_hashes(k::Int) = (s = repeat("abc", k); (hash(SHA.sha512(s)), hash(SHA.sha25
         r = wasm_run(wcompile(owner_memory_misaligned, (Int,)), "owner_memory_misaligned", k; rettype=Int)
         @test r isa Tuple && r[1] === :trap
     end
+    @wtest clear_ref_misaligned(0)
+    @wtest clear_ref_misaligned(8)
+    r = wasm_run(wcompile(clear_ref_misaligned, (Int,)), "clear_ref_misaligned", 7; rettype=Int)
+    @test r isa Tuple && r[1] === :trap
+    @wtest blas_empty_misaligned(1)
     for f in (owner_bytes, owner_byte)
         c = wcompile(f, (Int,))
         @test wasm_run(c, string(f), 0; rettype=Int) == f(0) == 1

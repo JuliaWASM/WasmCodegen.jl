@@ -263,6 +263,7 @@ function ptr_load!(fc::FnCtx, p::CGVal, i::CGVal, @nospecialize(T))
     end
     if o !== nothing && !is_object_origin(o) && T === o.eltype && !byte_addressable(fc, T)
         # a whole element of a memory whose elements are not stored as bytes
+        check_element_aligned!(fc, o)
         return outlined_memoryrefget!(fc, element_ref!(fc, o, i, T), const_value(fc, false), T)
     end
     isbitstype(T) || unsupported("a load of a ", T, " through a pointer")
@@ -299,6 +300,7 @@ function ptr_store!(fc::FnCtx, p::CGVal, v::CGVal, i::CGVal)
         # (natively one pointer per element, the `i`-th pointer the `i`-th element; here an
         # element is `stride` reference leaves, all null: undefined, as `unset_element!`)
         el = new_local!(fc, I32)
+        check_element_aligned!(fc, o)
         push_leaf!(fc, o.index)
         emit!(fc.b, :i32_const, elem_unit(o.eltype)); emit!(fc.b, :i32_div_u)
         if !(isconstant(i) && constant_value(i) == 1)
@@ -317,6 +319,7 @@ function ptr_store!(fc::FnCtx, p::CGVal, v::CGVal, i::CGVal)
         return p
     end
     if o !== nothing && !is_object_origin(o) && T === o.eltype && !byte_addressable(fc, T)
+        check_element_aligned!(fc, o)
         outlined_memoryrefset!(fc, element_ref!(fc, o, i, T), v, const_value(fc, false))
         return p
     end
@@ -359,17 +362,21 @@ function store_owner!(fc::FnCtx, p::CGVal, byte, off::Int, leaf::LeafVal)
     return
 end
 
-# the MemoryRef of the element at the byte offset of the origin, plus `i - 1` elements (a
-# trap when the offset is not at an element)
+# trap when the origin `o` is between two elements of its memory, whose elements are not
+# stored as bytes: an access of a whole element there has no bytes to address
+function check_element_aligned!(fc::FnCtx, o::PtrOrigin)
+    sz = elem_unit(o.eltype)
+    sz > 1 || return
+    push_leaf!(fc, o.index); emit!(fc.b, :i32_const, sz); emit!(fc.b, :i32_rem_u)
+    if!(fc.b); unreachable!(fc.b); end!(fc.b)
+    return
+end
+
+# the MemoryRef of the element at the byte offset of the origin, plus `i - 1` elements
 function element_ref!(fc::FnCtx, o::PtrOrigin, i::CGVal, @nospecialize(T))
     R = MemoryRef{o.eltype}
     sz = elem_unit(o.eltype)
     idx = new_local!(fc, I32)
-    if sz > 1
-        # between two elements: their bytes are not addressable
-        push_leaf!(fc, o.index); emit!(fc.b, :i32_const, sz); emit!(fc.b, :i32_rem_u)
-        if!(fc.b); unreachable!(fc.b); end!(fc.b)
-    end
     push_leaf!(fc, o.index); emit!(fc.b, :i32_const, sz); emit!(fc.b, :i32_div_u)
     push_val!(fc, convert_repr(fc, i, Int)); emit!(fc.b, :i32_wrap_i64)
     emit!(fc.b, :i32_add); emit!(fc.b, :i32_const, 1); emit!(fc.b, :i32_sub)
