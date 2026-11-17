@@ -606,15 +606,21 @@ function jacobi_scale!(X::Matrix{T}) where {T}
     return e
 end
 
+# the sweeps of rotations after which Jacobi's methods give up (they converge quadratically:
+# a matrix of finite elements takes about ten)
+const JACOBI_SWEEPS = 100
+
 # the eigenvalues (ascending) and eigenvectors (columns of V, n×n) of the symmetric n×n S,
-# by cyclic Jacobi rotations, until the off-diagonal elements are negligible
-function jacobi_eigen!(S::Matrix{T}, n::Int) where {T}
+# by cyclic Jacobi rotations, until the off-diagonal elements are negligible, and whether
+# they are after `sweeps` sweeps
+function jacobi_eigen!(S::Matrix{T}, n::Int, sweeps::Int=JACOBI_SWEEPS) where {T}
     V = zeros(T, n, n)
     for i in 1:n
         V[i, i] = one(T)
     end
     e = jacobi_scale!(S)
-    for sweep in 1:100
+    converged = false
+    for sweep in 0:sweeps
         off = dia = zero(T)
         for q in 1:n
             dia += S[q, q]^2
@@ -622,7 +628,8 @@ function jacobi_eigen!(S::Matrix{T}, n::Int) where {T}
                 off += S[p, q]^2
             end
         end
-        off <= (eps(T) / 2)^2 * (dia + off) && break
+        (converged = off <= (eps(T) / 2)^2 * (dia + off)) && break
+        sweep == sweeps && break
         for q in 2:n, p in 1:q-1
             apq = S[p, q]
             apq == 0 && continue
@@ -650,13 +657,13 @@ function jacobi_eigen!(S::Matrix{T}, n::Int) where {T}
     end
     w = T[ldexp(S[i, i], -e) for i in 1:n]
     perm = sortperm(w)
-    return w[perm], V[:, perm]
+    return w[perm], V[:, perm], converged
 end
 
 """`syevr`: the eigenvalues (ascending) and, with `jobz` 'V', eigenvectors of the symmetric
 A (stored in its `uplo` triangle): all of them (`range` 'A'), those in (vl, vu] ('V'), or
 the il-th to iu-th ('I'). A's triangle is destroyed. A workspace query where `lwork` or
-`liwork` is -1."""
+`liwork` is -1. `info` is 1 where the iteration did not converge (LAPACK's: an internal error)."""
 function syevr!(jobz::UInt8, range::UInt8, uplo::UInt8, n::Int, A::ArrayArg{T}, lda::Int,
                 vl::T, vu::T, il::Int, iu::Int, abstol::T, m::ArrayArg{Int}, W::ArrayArg{T},
                 Z::ArrayArg{T}, ldz::Int, isuppz::ArrayArg{Int}, work::ArrayArg{T}, lwork::Int,
@@ -672,7 +679,8 @@ function syevr!(jobz::UInt8, range::UInt8, uplo::UInt8, n::Int, A::ArrayArg{T}, 
     for j in 1:n, i in 1:n
         S[i, j] = (up ? i <= j : i >= j) ? elem(A, lda, i, j) : elem(A, lda, j, i)
     end
-    w, V = jacobi_eigen!(S, n)
+    w, V, converged = jacobi_eigen!(S, n)
+    converged || setinfo!(info, 1)
     sel = range == UInt8('V') || range == UInt8('v') ? [k for k in 1:n if vl < w[k] <= vu] :
           range == UInt8('I') || range == UInt8('i') ? collect(il:iu) : collect(1:n)
     st!(m, 1, length(sel))
@@ -687,13 +695,15 @@ function syevr!(jobz::UInt8, range::UInt8, uplo::UInt8, n::Int, A::ArrayArg{T}, 
 end
 
 """
-    jacobi_svd(m, n, A, lda, fullu, fullv) -> (S, U, V)
+    jacobi_svd(m, n, A, lda, fullu, fullv, sweeps=JACOBI_SWEEPS) -> (S, U, V, converged)
 
 The singular values (descending) of the m×n A, and its left and right singular vectors: the
 first min(m, n) of each, or all (`fullu`, `fullv`, completed to orthonormal bases), by
-one-sided Jacobi rotations.
+one-sided Jacobi rotations, and whether they converged in `sweeps` sweeps. Of an A with
+elements that are not finite, the singular values are NaN (as LAPACK's), without iterating.
 """
-function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv::Bool) where {T}
+function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv::Bool,
+                    sweeps::Int=JACOBI_SWEEPS) where {T}
     k = min(m, n)
     # (on Aᵀ if wider than tall: its columns are the rows)
     tall = m >= n
@@ -706,9 +716,11 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     for i in 1:q
         V[i, i] = one(T)
     end
+    finite = all(isfinite, G)
     e = jacobi_scale!(G)
     tol = eps(T) * p
-    for sweep in 1:100
+    converged = !finite
+    for sweep in 1:(finite ? sweeps : 0)
         rotated = false
         for b in 2:q, a in 1:b-1
             alpha = beta = gamma = zero(T)
@@ -734,9 +746,9 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
                 V[i, b] = s * va + c * vb
             end
         end
-        rotated || break
+        rotated || (converged = true; break)
     end
-    sv = T[sqrt(sum(abs2, view(G, :, j))) for j in 1:q]
+    sv = T[finite ? sqrt(sum(abs2, view(G, :, j))) : T(NaN) for j in 1:q]
     perm = sortperm(sv; rev=true)
     S = T[ldexp(sv[perm[j]], -e) for j in 1:k]
     # the left vectors of G (normalized columns, completed to an orthonormal basis), the right
@@ -771,7 +783,7 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     for j in 1:size(R, 2)
         R[:, j] .= view(V, :, perm[j])
     end
-    return tall ? (S, L, R) : (S, R, L)
+    return tall ? (S, L, R, converged) : (S, R, L, converged)
 end
 
 # a job character, in lowercase
@@ -792,7 +804,8 @@ end
 """`gesdd`: the singular values (descending) of the m×n A and, by `jobz`, none of the
 singular vectors ('N'), the first min(m, n) of each ('S', U m×k, Vᵀ k×n; 'O', the same with
 A overwritten by U where m >= n, else by Vᵀ) or all ('A', U m×m, Vᵀ n×n). A is destroyed. A
-workspace query where `lwork` is -1."""
+workspace query where `lwork` is -1. `info` is -4 where A has a NaN (as LAPACK's `gesdd`,
+not its `gesvd`), 1 where the iteration did not converge."""
 function gesdd!(jobz::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::Int, S::ArrayArg{T},
                 U::ArrayArg{T}, ldu::Int, VT::ArrayArg{T}, ldvt::Int, work::ArrayArg{T},
                 lwork::Int, iwork::ArrayArg{Int}, info) where {T}
@@ -801,8 +814,12 @@ function gesdd!(jobz::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::Int, S::ArrayA
         st!(work, 1, one(T))  # (no workspace is used)
         return
     end
+    for j in 1:n, i in 1:m
+        isnan(elem(A, lda, i, j)) && (setinfo!(info, -4); return)
+    end
     full = job(jobz) == UInt8('a')
-    sv, Uc, Vc = jacobi_svd(m, n, A, lda, full, full)
+    sv, Uc, Vc, converged = jacobi_svd(m, n, A, lda, full, full)
+    converged || setinfo!(info, 1)
     for j in eachindex(sv)
         st!(S, j, sv[j])
     end
@@ -822,7 +839,8 @@ function gesvd!(jobu::UInt8, jobvt::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::
         st!(work, 1, one(T))  # (no workspace is used)
         return
     end
-    sv, Uc, Vc = jacobi_svd(m, n, A, lda, job(jobu) == UInt8('a'), job(jobvt) == UInt8('a'))
+    sv, Uc, Vc, converged = jacobi_svd(m, n, A, lda, job(jobu) == UInt8('a'), job(jobvt) == UInt8('a'))
+    converged || setinfo!(info, 1)
     for j in eachindex(sv)
         st!(S, j, sv[j])
     end

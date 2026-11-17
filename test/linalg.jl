@@ -75,7 +75,32 @@ function la_gesdd_o(s::Float64, tall::Bool)
      Float64(10size(U, 1) + size(U, 2)), Float64(10size(VT, 1) + size(VT, 2)))
 end
 
+# elements that are not finite: NaN singular values, but `gesdd` rejects a NaN (its argument 4)
+function la_svd_nonfinite(x::Float64)
+    A = [x 1.0; 1.0 2.0]
+    dd = try
+        Float64(all(isnan, LinearAlgebra.LAPACK.gesdd!('N', copy(A))[2]))
+    catch e
+        e isa ArgumentError ? -4.0 : -1.0
+    end
+    return (dd, Float64(all(isnan, LinearAlgebra.LAPACK.gesvd!('N', 'N', copy(A))[2])),
+            Float64(all(isnan, LinearAlgebra.LAPACK.gesvd!('S', 'S', copy(A))[2])))
+end
+
+@testset "Jacobi iterations that do not converge" begin
+    L = WasmCodegen.Runtime.LAPACK
+    A = wmat(5, 4, 0.2); S = A' * A
+    @test L.jacobi_eigen!(copy(S), 4)[3]
+    @test !L.jacobi_eigen!(copy(S), 4, 1)[3]
+    @test L.jacobi_svd(5, 4, copy(A).ref, 5, false, false)[4]
+    @test !L.jacobi_svd(5, 4, copy(A).ref, 5, false, false, 1)[4]
+    @test L.jacobi_svd(4, 5, copy(A')[:, :].ref, 4, true, true)[4]
+end
+
 @testset "linear algebra" begin
+    for x in (NaN, Inf, -Inf, 1.0)
+        @wtest la_svd_nonfinite(x)
+    end
     for s in (1e-310, 1e-300, 1.0, 1e200, 1e300)
         @wtest_approx la_qr_scaled(s)
         @wtest_approx la_qrp_scaled(s)
