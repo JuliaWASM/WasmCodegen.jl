@@ -133,6 +133,12 @@ la_svd_rank1(a::Float64, b::Float64) = (F = svd([a b; 4a 4b]; full=true); (F.S[1
 la_svd_subnormal() = (d = nextfloat(0.0); F = svd([1.0 0.0; 0.0 d; 0.0 d]; full=true); (F.S[1], la_svd_orth(F)...))
 la_svd_ratio(x::Float64, y::Float64) = (F = svd([x y; 0.0 y]); (F.S[1] / x, F.S[2] / y, la_svd_orth(F)...))
 la_svd_range(x::Float64, y::Float64) = (F = svd([x 0.0; 0.0 y]); (F.S[1] / x, F.S[2] / y, la_svd_orth(F)...))
+# a small column whose part orthogonal to the large one is smaller yet; a subnormal column
+# that is not orthogonal to the other; many more rows than columns
+la_svd_small() = (e = eps(); F = svd([1.0 e; 0.0 e^2 / 2]); (F.S[1], F.S[2] / e^2, la_svd_orth(F)...))
+la_svd_stuck() = (F = svd([1.0 nextfloat(0.0); 1.0 0.0]); (F.S[1], la_svd_orth(F)...))
+la_svd_long(n::Int) = (A = zeros(Float32, n, 2); A[1, 1] = 1; A[1, 2] = 0.1f0; A[2, 2] = 1; F = svd(A);
+                       (round(Float64(F.S[1]); digits=4), round(Float64(F.S[2]); digits=4)))
 la_svd_tall(n::Int) = (A = wmat(n + 6, 2, 0.3); F = svd(A); G = svd(A; full=true);
                        (F.S[1], F.S[2], Float64(size(F.U, 2)), Float64(size(G.U, 2)), sum(abs.(F.U)),
                         sum(abs.(G.U[:, 1:2])), sum(abs.(G.U' * G.U)), sum(abs.(G.Vt)), sum(abs.(F.U * Diagonal(F.S) * F.Vt - A))))
@@ -201,6 +207,9 @@ end
     @wtest_approx la_svd_subnormal()
     @wtest_approx la_svd_ratio(1e100, 1e-300)
     @wtest_approx la_svd_range(1e200, 1e-200)
+    @wtest_approx la_svd_small()
+    @wtest_approx la_svd_stuck()
+    @wtest_approx la_svd_long(1_000_000)
     for x in (1f-40, 1f-30)
         @wtest_approx la_svd_tiny32(x)
     end

@@ -746,7 +746,8 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     end
     finite = all(isfinite, G)
     e = jacobi_svd_scale!(G)
-    tol = eps(T) * p
+    # (the cosine of two columns that counts as none, as LAPACK's `gesvj`)
+    tol = eps(T) * sqrt(T(p))
     converged = !finite
     for sweep in 1:(finite ? sweeps : 0)
         rotated = false
@@ -764,14 +765,22 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
             if r <= eps(T)
                 # a column negligible beside the other (the ratio of their norms may
                 # underflow): the rotation leaves the large one as it is, to rounding, and
-                # takes from the small one its projection on it. What is left of a column
-                # that was parallel to the other is rounding: none of it
+                # takes from the small one its projection on it. A column left with elements
+                # too small to hold the difference (subnormal: it is no closer to
+                # orthogonal) is none
                 big, small = nb <= na ? (a, b) : (b, a)
                 nbig, nsmall = max(na, nb), min(na, nb)
                 for i in 1:p
                     G[i, small] -= (g * nsmall) * (G[i, big] / nbig)
                 end
-                column_norm(G, small) <= eps(T) * nsmall && (G[:, small] .= zero(T))
+                nsmall = column_norm(G, small)
+                if 0 < nsmall < floatmin(T) / eps(T)
+                    g = zero(T)
+                    for i in 1:p
+                        g += (G[i, small] / nsmall) * (G[i, big] / nbig)
+                    end
+                    abs(g) <= tol || (G[:, small] .= zero(T))
+                end
                 for i in 1:q
                     vbig, vsmall = V[i, big], V[i, small]
                     V[i, small] = vsmall - (g * r) * vbig
