@@ -786,8 +786,15 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     return tall ? (S, L, R, converged) : (S, R, L, converged)
 end
 
-# a job character, in lowercase
-job(c::UInt8) = c | 0x20
+# what a job character of `gesdd` and `gesvd` asks of the singular vectors of a side: none
+# ('N'), the first min(m, n) ('S'), those written over A ('O') or all ('A'); `JOB_INVALID`
+# for another character (in either case, as LAPACK's `lsame`)
+const JOB_NONE, JOB_THIN, JOB_OVER, JOB_ALL, JOB_INVALID = 0, 1, 2, 3, -1
+function svd_job(c::UInt8)
+    c |= 0x20
+    return c == UInt8('n') ? JOB_NONE : c == UInt8('s') ? JOB_THIN : c == UInt8('o') ? JOB_OVER :
+           c == UInt8('a') ? JOB_ALL : JOB_INVALID
+end
 
 # the m×c matrix U into the array X (leading dimension ldx), and Vᵀ of the n×r V
 function put_u!(X::ArrayArg{T}, ldx::Int, U::Matrix{T}) where {T}
@@ -804,12 +811,14 @@ end
 """`gesdd`: the singular values (descending) of the m×n A and, by `jobz`, none of the
 singular vectors ('N'), the first min(m, n) of each ('S', U m×k, Vᵀ k×n; 'O', the same with
 A overwritten by U where m >= n, else by Vᵀ) or all ('A', U m×m, Vᵀ n×n). A is destroyed. A
-workspace query where `lwork` is -1. `info` is -4 where A has a NaN (as LAPACK's `gesdd`,
+workspace query where `lwork` is -1. `info` is -1 for another `jobz`, -4 where A has a NaN (as LAPACK's `gesdd`,
 not its `gesvd`), 1 where the iteration did not converge."""
 function gesdd!(jobz::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::Int, S::ArrayArg{T},
                 U::ArrayArg{T}, ldu::Int, VT::ArrayArg{T}, ldvt::Int, work::ArrayArg{T},
                 lwork::Int, iwork::ArrayArg{Int}, info) where {T}
     setinfo!(info, 0)
+    jz = svd_job(jobz)
+    jz == JOB_INVALID && (setinfo!(info, -1); return)
     if lwork == -1
         st!(work, 1, one(T))  # (no workspace is used)
         return
@@ -817,37 +826,37 @@ function gesdd!(jobz::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::Int, S::ArrayA
     for j in 1:n, i in 1:m
         isnan(elem(A, lda, i, j)) && (setinfo!(info, -4); return)
     end
-    full = job(jobz) == UInt8('a')
-    sv, Uc, Vc, converged = jacobi_svd(m, n, A, lda, full, full)
+    sv, Uc, Vc, converged = jacobi_svd(m, n, A, lda, jz == JOB_ALL, jz == JOB_ALL)
     converged || setinfo!(info, 1)
     for j in eachindex(sv)
         st!(S, j, sv[j])
     end
-    job(jobz) == UInt8('n') && return
-    over = job(jobz) == UInt8('o')
-    over && m >= n ? put_u!(A, lda, Uc) : put_u!(U, ldu, Uc)
-    over && m < n ? put_vt!(A, lda, Vc) : put_vt!(VT, ldvt, Vc)
+    jz == JOB_NONE && return
+    jz == JOB_OVER && m >= n ? put_u!(A, lda, Uc) : put_u!(U, ldu, Uc)
+    jz == JOB_OVER && m < n ? put_vt!(A, lda, Vc) : put_vt!(VT, ldvt, Vc)
 end
 
 """`gesvd`: as `gesdd`, the left and right singular vectors chosen separately (`jobu`,
-`jobvt`): none ('N'), the first min(m, n) ('S', or 'O': written over A) or all ('A')."""
+`jobvt`): none ('N'), the first min(m, n) ('S', or 'O': written over A) or all ('A'). `info`
+is -1 for another `jobu`, -2 for another `jobvt` or where both are 'O'."""
 function gesvd!(jobu::UInt8, jobvt::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::Int,
                 S::ArrayArg{T}, U::ArrayArg{T}, ldu::Int, VT::ArrayArg{T}, ldvt::Int,
                 work::ArrayArg{T}, lwork::Int, info) where {T}
     setinfo!(info, 0)
+    ju, jv = svd_job(jobu), svd_job(jobvt)
+    ju == JOB_INVALID && (setinfo!(info, -1); return)
+    (jv == JOB_INVALID || (ju == JOB_OVER && jv == JOB_OVER)) && (setinfo!(info, -2); return)
     if lwork == -1
         st!(work, 1, one(T))  # (no workspace is used)
         return
     end
-    sv, Uc, Vc, converged = jacobi_svd(m, n, A, lda, job(jobu) == UInt8('a'), job(jobvt) == UInt8('a'))
+    sv, Uc, Vc, converged = jacobi_svd(m, n, A, lda, ju == JOB_ALL, jv == JOB_ALL)
     converged || setinfo!(info, 1)
     for j in eachindex(sv)
         st!(S, j, sv[j])
     end
-    job(jobu) in (UInt8('a'), UInt8('s')) && put_u!(U, ldu, Uc)
-    job(jobvt) in (UInt8('a'), UInt8('s')) && put_vt!(VT, ldvt, Vc)
-    job(jobu) == UInt8('o') && put_u!(A, lda, Uc)
-    job(jobvt) == UInt8('o') && put_vt!(A, lda, Vc)
+    ju == JOB_OVER ? put_u!(A, lda, Uc) : ju != JOB_NONE && put_u!(U, ldu, Uc)
+    jv == JOB_OVER ? put_vt!(A, lda, Vc) : jv != JOB_NONE && put_vt!(VT, ldvt, Vc)
 end
 
 

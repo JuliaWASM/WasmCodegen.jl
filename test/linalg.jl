@@ -87,6 +87,24 @@ function la_svd_nonfinite(x::Float64)
             Float64(all(isnan, LinearAlgebra.LAPACK.gesvd!('S', 'S', copy(A))[2])))
 end
 
+# `gesvd` overwriting A with the left or the right singular vectors (its first min(m, n)
+# columns or rows: the rest of A is not defined)
+function la_gesvd_o(s::Float64, tall::Bool, left::Bool)
+    A = tall ? [1.0 2.0; 3.0 4.0; 5.0 s] : [1.0 3.0 5.0; 2.0 4.0 s]
+    U, S, VT = left ? LinearAlgebra.LAPACK.gesvd!('O', 'S', A) : LinearAlgebra.LAPACK.gesvd!('A', 'O', A)
+    (S[1], S[2], sum(abs.(U[:, 1:2])), sum(abs.(VT[1:2, :])), abs(U[1, 1]), abs(VT[2, 2]),
+     Float64(10size(U, 1) + size(U, 2)), Float64(10size(VT, 1) + size(VT, 2)))
+end
+# job characters LAPACK does not have, or not together (LinearAlgebra rejects them): 1 for an
+# ArgumentError
+const SVD_JOBS = ('A', 'S', 'O', 'N', 'X', 's')
+function la_svd_jobs(i::Int, j::Int)
+    A = [1.0 2.0; 3.0 4.0; 5.0 6.0]
+    dd = try; LinearAlgebra.LAPACK.gesdd!(SVD_JOBS[i], copy(A))[2][1]; catch e; e isa ArgumentError ? 1.0 : 2.0; end
+    vd = try; LinearAlgebra.LAPACK.gesvd!(SVD_JOBS[i], SVD_JOBS[j], copy(A))[2][1]; catch e; e isa ArgumentError ? 1.0 : 2.0; end
+    return (dd, vd)
+end
+
 @testset "Jacobi iterations that do not converge" begin
     L = WasmCodegen.Runtime.LAPACK
     A = wmat(5, 4, 0.2); S = A' * A
@@ -95,6 +113,10 @@ end
     @test L.jacobi_svd(5, 4, copy(A).ref, 5, false, false)[4]
     @test !L.jacobi_svd(5, 4, copy(A).ref, 5, false, false, 1)[4]
     @test L.jacobi_svd(4, 5, copy(A')[:, :].ref, 4, true, true)[4]
+    # job characters, in either case (the runtime's `gesdd!` and `gesvd!` set a negative `info`
+    # for others, which LinearAlgebra does not pass them)
+    @test map(c -> L.svd_job(UInt8(c)), ('N', 's', 'O', 'a', 'X', 'V')) ==
+          (L.JOB_NONE, L.JOB_THIN, L.JOB_OVER, L.JOB_ALL, L.JOB_INVALID, L.JOB_INVALID)
 end
 
 @testset "linear algebra" begin
@@ -112,6 +134,12 @@ end
     @wtest_approx la_svd_thin(20000)
     @wtest_approx la_gesdd_o(6.0, true)
     @wtest_approx la_gesdd_o(6.0, false)
+    for tall in (true, false), left in (true, false)
+        @wtest_approx la_gesvd_o(6.0, tall, left)
+    end
+    for (i, j) in ((1, 2), (3, 3), (5, 4), (4, 5), (6, 4), (3, 4), (4, 3))
+        @wtest_approx la_svd_jobs(i, j)
+    end
     for n in 0:3, upper in (true, false), rook in (false, true)
         @wtest_approx la_bk(n, upper, rook)
     end
