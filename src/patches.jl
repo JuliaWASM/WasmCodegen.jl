@@ -62,7 +62,7 @@ function check_base_source(patch::String, call::Expr, file::String, line::Int)
     sig = Tuple{typeof(f), types...}
     for m in methods(f)
         m.sig == sig || continue
-        (m.line == 0 || (m.line == line && endswith(String(m.file), basename(file)))) && return
+        (m.line == 0 || (m.line == line && basename(String(m.file)) == basename(file))) && return
         break
     end
     error("$patch: `$call` at $file:$line is not a method of the loaded Base " *
