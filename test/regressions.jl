@@ -482,12 +482,14 @@ end
 @noinline rb_op(x) = Base.inferencebarrier(x)
 mutable struct RBConst; const a::Int; b::Int; end
 struct RBImm; a::Int; end
-rb_sym(s::Symbol) = s === :getfield ? 1 : s === :setfield! ? 2 : s === :isdefined ? 3 : s === :fieldtype ? 4 : s === :<: ? 5 : 9
+rb_sym(s::Symbol) = s === :getfield ? 1 : s === :setfield! ? 2 : s === :isdefined ? 3 : s === :fieldtype ? 4 : s === :<: ? 5 : s === :getglobal ? 6 : 9
 rb_exp(@nospecialize(T)) = T === Symbol ? 1 : T === Union{Int,Symbol} ? 2 : T === Type ? 3 : 9
-rb_got(@nospecialize(x)) = x isa Int32 ? 1 + Int(x) : x isa Bool ? 20 + Int(x) : x isa Int ? 40 + x : 99
+rb_got(@nospecialize(x)) = x isa Int32 ? 1 + Int(x) : x isa Bool ? 20 + Int(x) : x isa Int ? 40 + x :
+                           x isa Core.TypeofVararg ? 60 : x isa Type ? 61 : x isa String ? 62 : 99
+rb_ctx(@nospecialize(c)) = c isa String ? ncodeunits(c) : 7
 rb_msg(m::String) = (s = 0; for c in codeunits(m); s += Int(c); end; s)
 function rb_err(@nospecialize(e))::Int
-    e isa TypeError && return -(1000rb_sym(e.func) + 100rb_exp(e.expected) + rb_got(e.got))
+    e isa TypeError && return -(1000rb_sym(e.func) + 100rb_exp(e.expected) + rb_got(e.got) + 100000rb_ctx(e.context))
     if e isa ErrorException
         m = e.msg
         return m isa String ? -10000 - rb_msg(m) : -4
@@ -508,11 +510,14 @@ function rb_splat_missing(n::Int)
     (t[i] === missing, t[n]::Float64, length(t))
 end
 rb_sizeof(n::Int) = (sizeof(Memory{Union{Nothing,Int}}(undef, n)), sizeof(Memory{Union{Missing,Bool}}(undef, n)),
-                     sizeof(Memory{Union{Nothing,Int8,Int}}(undef, n)), sizeof(Memory{Int}(undef, n)), sizeof(Memory{Int8}(undef, n)))
+                     sizeof(Memory{Union{Nothing,Int8,Int}}(undef, n)), sizeof(Memory{Int}(undef, n)), sizeof(Memory{Int8}(undef, n)),
+                     sizeof(AtomicMemory{Union{Nothing,Int}}(undef, n)), sizeof(AtomicMemory{Int8}(undef, n)),
+                     sizeof(AtomicMemory{Union{Nothing,Int8}}(undef, n)))
 rb_getfield(i::Int) = try getfield(rb_op((i, 2.0))::Tuple{Int,Float64}, i % Int32) isa Int ? 1 : 2 catch e; rb_err(e) end
 rb_getfield_c(i::Int) = try getfield(rb_op((i, 2.0))::Tuple{Int,Float64}, Int32(1)) isa Int ? 1 : 2 catch e; rb_err(e) end
 rb_getfield_b(i::Int) = try getfield(rb_op(Ref(i))::Base.RefValue{Int}, i > 0)::Int catch e; rb_err(e) end
 rb_getfield_any(i::Int) = try getfield(rb_op((i, 2.0)), i % Int32) isa Int ? 1 : 2 catch e; rb_err(e) end
+rb_getfield_mod(i::Int) = try getfield(Base, i % Int32) isa Int ? 1 : 2 catch e; rb_err(e) end
 rb_isdefined(i::Int) = try isdefined(rb_op(Ref(i))::Base.RefValue{Int}, i % Int32) ? 1 : 2 catch e; rb_err(e) end
 rb_isdefined_ok(i::Int) = try isdefined(rb_op(Ref(i))::Base.RefValue{Int}, i) ? 1 : 2 catch e; rb_err(e) end
 rb_fieldtype(i::Int) = try fieldtype(Base.RefValue{Int}, i % Int32) === Int ? 1 : 2 catch e; rb_err(e) end
@@ -547,7 +552,7 @@ rb_bfloat(a::UInt16, b::UInt16) = reinterpret(UInt16, Base.add_float(reinterpret
     # the size of a memory of a union of bits types counts its selector bytes
     for n in (0, 3); @wtest rb_sizeof(n); end
     # a field index that is neither an Int nor a Symbol, a const field, an immutable value
-    for f in (rb_getfield, rb_getfield_c, rb_getfield_b, rb_getfield_any, rb_isdefined, rb_isdefined_ok, rb_fieldtype,
+    for f in (rb_getfield, rb_getfield_mod, rb_getfield_c, rb_getfield_b, rb_getfield_any, rb_isdefined, rb_isdefined_ok, rb_fieldtype,
               rb_fieldtype_ok, rb_setfield_idx, rb_setconst, rb_setimm, rb_settuple)
         @eval @wtest $f(1)
     end

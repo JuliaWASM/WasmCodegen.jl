@@ -343,7 +343,12 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
             return x.vals[constant_value(idx)]
         end
         x = x::CGVal
-        bad_field_index(idx.typ) && return field_index_error!(fc, :getfield, idx)
+        if bad_field_index(idx.typ)
+            # (an ordering is checked first natively; of a module, the error is `getglobal`'s)
+            all(a -> a isa CGVal && a.typ === Bool, @view args[3:end]) ||
+                unsupported("getfield with an ordering and a field of type ", idx.typ)
+            return field_index_error!(fc, x.typ === Module ? :getglobal : :getfield, idx)
+        end
         if isconstant(x) && isconstant(idx) && constant_value(x) isa Type
             # a field of a type (fixed once the type is made; a value of type Type{X}); one it
             # has not is the error below, at run time
@@ -378,15 +383,17 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
     elseif f === Core.setfield!
         x, idx, v = args[1], args[2], args[3]
         T = x.typ
-        # (the errors of the C runtime, in its order: an immutable value, the index, a const field)
-        T isa DataType && isconcretetype(T) && !ismutabletype(T) &&
+        # (the errors of the C runtime, in its order: an immutable value, the index, a const field;
+        # an ordering is checked before them)
+        ordered() = length(args) == 3 || unsupported("setfield! with an ordering, of a value of type ", T)
+        T isa DataType && isconcretetype(T) && !ismutabletype(T) && ordered() &&
             return throw_error!(fc, Runtime.throw_error_message,
                                 const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
-        bad_field_index(idx.typ) && return field_index_error!(fc, :setfield!, idx)
+        bad_field_index(idx.typ) && ordered() && return field_index_error!(fc, :setfield!, idx)
         isconstant(idx) || unsupported("setfield! with a field not known at compile time")
         is_no_field(T, constant_value(idx)) && return no_field!(fc, T, constant_value(idx))
         i = field_index(T, constant_value(idx))
-        T isa DataType && isconcretetype(T) && isconst(T, i) &&
+        T isa DataType && isconcretetype(T) && isconst(T, i) && ordered() &&
             return throw_error!(fc, Runtime.throw_error_message,
                                 const_value(fc, string("setfield!: const field .", fieldname(T, i), " of type ", T.name.name, " cannot be changed")))
         return set_field!(fc, x, i, v)
@@ -395,7 +402,10 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         return emit_atomic_field!(fc, f, args, typ)
     elseif f === Core.isdefined
         x, idx = args[1], args[2]
-        bad_field_index(idx.typ) && return field_index_error!(fc, :isdefined, idx)
+        if bad_field_index(idx.typ)
+            length(args) == 2 || unsupported("isdefined with an ordering and a field of type ", idx.typ)
+            return field_index_error!(fc, :isdefined, idx)
+        end
         isconstant(idx) || return isdefined_dynamic!(fc, x, idx)
         is_no_field(x.typ, constant_value(idx)) && return const_value(fc, false)
         return emit_isdefined!(fc, x, field_index(x.typ, constant_value(idx)))
@@ -478,9 +488,9 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         elseif is_memory_type(x.typ)
             n = get_field(fc, x, 1)
             push_val!(fc, n)
-            # (of an isbits union: with the byte of each element's selector, as natively)
-            E = memory_eltype(x.typ)
-            emit!(fc.b, :i64_const, Base.aligned_sizeof(E) + Base.isbitsunion(E))
+            # (the size of an element as natively: of an isbits union, with the byte of its
+            # selector; of an atomic memory, with its lock or as a reference)
+            emit!(fc.b, :i64_const, Core.sizeof(x.typ(undef, 1)))
             emit!(fc.b, :i64_mul)
             return pop_val!(fc, Int)
         end
