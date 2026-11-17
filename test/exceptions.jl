@@ -371,7 +371,21 @@ function escapes_handler(k::Int)
     try rethrow() catch e; ncodeunits((e::ErrorException).msg::String) end
 end
 
+# an index of `memoryrefnew` that is no Int: a TypeError
+function memoryref_index(i)
+    try
+        r = Core.memoryrefnew(Memory{Int}(undef, 2))
+        Core.memoryrefnew(r, i, true)
+        return 0
+    catch e
+        return e isa TypeError && e.func === :memoryrefnew && e.expected === Int && e.got === i ? 1 : 2
+    end
+end
+
 @testset "exceptions" begin
+    @wtest memoryref_index(UInt64(1))
+    @wtest memoryref_index(1)
+    @wtest memoryref_index(0x01)
     let c = wcompile(escapes_handler, (Int,))
         @test wasm_run(c, "escapes_handler", 2; rettype=Int) == escapes_handler(2) == 43
         r = wasm_run(c, "escapes_handler", 1; rettype=Int)

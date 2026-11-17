@@ -114,6 +114,7 @@ function outlined_memoryrefnew!(fc::FnCtx, args::Vector{Any})
     x = args[1]::CGVal
     (length(args) >= 2 && is_memoryref_type(x.typ)) || return emit_memoryrefnew!(fc, args)
     R = x.typ
+    bad_memory_index(args[2]::CGVal) && return memory_index_error!(fc, args[2]::CGVal)
     i = convert_repr(fc, args[2]::CGVal, Int)
     b = length(args) >= 3 ? boundscheck_value(args[3]) : true
     return call_outlined!(fc, (:memoryrefnew, R, b), () -> "memoryrefnew_" * typename_str(ref_eltype(R)),
