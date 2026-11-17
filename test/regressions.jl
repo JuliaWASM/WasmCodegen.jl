@@ -518,6 +518,7 @@ rb_getfield_c(i::Int) = try getfield(rb_op((i, 2.0))::Tuple{Int,Float64}, Int32(
 rb_getfield_b(i::Int) = try getfield(rb_op(Ref(i))::Base.RefValue{Int}, i > 0)::Int catch e; rb_err(e) end
 rb_getfield_any(i::Int) = try getfield(rb_op((i, 2.0)), i % Int32) isa Int ? 1 : 2 catch e; rb_err(e) end
 rb_getfield_mod(i::Int) = try getfield(Base, i % Int32) isa Int ? 1 : 2 catch e; rb_err(e) end
+rb_getfield_anymod(i::Int) = try getfield(rb_op(Base), i % Int32) isa Int ? 1 : 2 catch e; rb_err(e) end
 rb_isdefined(i::Int) = try isdefined(rb_op(Ref(i))::Base.RefValue{Int}, i % Int32) ? 1 : 2 catch e; rb_err(e) end
 rb_isdefined_ok(i::Int) = try isdefined(rb_op(Ref(i))::Base.RefValue{Int}, i) ? 1 : 2 catch e; rb_err(e) end
 rb_fieldtype(i::Int) = try fieldtype(Base.RefValue{Int}, i % Int32) === Int ? 1 : 2 catch e; rb_err(e) end
@@ -552,7 +553,7 @@ rb_bfloat(a::UInt16, b::UInt16) = reinterpret(UInt16, Base.add_float(reinterpret
     # the size of a memory of a union of bits types counts its selector bytes
     for n in (0, 3); @wtest rb_sizeof(n); end
     # a field index that is neither an Int nor a Symbol, a const field, an immutable value
-    for f in (rb_getfield, rb_getfield_mod, rb_getfield_c, rb_getfield_b, rb_getfield_any, rb_isdefined, rb_isdefined_ok, rb_fieldtype,
+    for f in (rb_getfield, rb_getfield_mod, rb_getfield_anymod, rb_getfield_c, rb_getfield_b, rb_getfield_any, rb_isdefined, rb_isdefined_ok, rb_fieldtype,
               rb_fieldtype_ok, rb_setfield_idx, rb_setconst, rb_setimm, rb_settuple)
         @eval @wtest $f(1)
     end

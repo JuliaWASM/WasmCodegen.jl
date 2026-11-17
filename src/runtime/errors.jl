@@ -12,6 +12,9 @@
 # an Int nor a Symbol, a value that is not a type)
 @noinline throw_builtin_type_error(f::Symbol, @nospecialize(expected), @nospecialize(got)) =
     throw(TypeError(f, "", expected::Type, got))
+# (`getfield` of a field index that is neither an Int nor a Symbol: of a module, `getglobal`'s error)
+@noinline throw_getfield_index_error(@nospecialize(x), @nospecialize(i)) =
+    x isa Module ? throw(TypeError(:getglobal, "", Symbol, i)) : throw(TypeError(:getfield, "", Union{Int,Symbol}, i))
 @noinline throw_error_message(msg::String) = throw(ErrorException(msg))
 @noinline throw_method_error(@nospecialize(f), @nospecialize(args)) = throw(MethodError(f, args))
 @noinline throw_field_error(@nospecialize(T), s::Symbol) = throw(FieldError(T::DataType, s))

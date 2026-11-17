@@ -345,9 +345,12 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         x = x::CGVal
         if bad_field_index(idx.typ)
             # (an ordering is checked first natively; of a module, the error is `getglobal`'s)
-            all(a -> a isa CGVal && a.typ === Bool, @view args[3:end]) ||
+            (length(args) == 2 || (length(args) == 3 && args[3] isa CGVal && args[3].typ === Bool)) ||
                 unsupported("getfield with an ordering and a field of type ", idx.typ)
-            return field_index_error!(fc, x.typ === Module ? :getglobal : :getfield, idx)
+            typeintersect(x.typ, Module) === Union{} && return field_index_error!(fc, :getfield, idx)
+            x.typ === Module && return field_index_error!(fc, :getglobal, idx)
+            return throw_error!(fc, Runtime.throw_getfield_index_error,
+                                () -> convert_repr(fc, x, Any), () -> convert_repr(fc, idx, Any))
         end
         if isconstant(x) && isconstant(idx) && constant_value(x) isa Type
             # a field of a type (fixed once the type is made; a value of type Type{X}); one it
@@ -389,7 +392,9 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         T isa DataType && isconcretetype(T) && !ismutabletype(T) && ordered() &&
             return throw_error!(fc, Runtime.throw_error_message,
                                 const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
-        bad_field_index(idx.typ) && ordered() && return field_index_error!(fc, :setfield!, idx)
+        # (of a module, natively another error, before the index's)
+        bad_field_index(idx.typ) && typeintersect(T, Module) === Union{} && ordered() &&
+            return field_index_error!(fc, :setfield!, idx)
         isconstant(idx) || unsupported("setfield! with a field not known at compile time")
         is_no_field(T, constant_value(idx)) && return no_field!(fc, T, constant_value(idx))
         i = field_index(T, constant_value(idx))
@@ -490,7 +495,7 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
             push_val!(fc, n)
             # (the size of an element as natively: of an isbits union, with the byte of its
             # selector; of an atomic memory, with its lock or as a reference)
-            emit!(fc.b, :i64_const, Core.sizeof(x.typ(undef, 1)))
+            emit!(fc.b, :i64_const, Core.sizeof(Core.memorynew(x.typ, 1)))
             emit!(fc.b, :i64_mul)
             return pop_val!(fc, Int)
         end
