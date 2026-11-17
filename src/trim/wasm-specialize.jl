@@ -18,15 +18,8 @@ let basedir = joinpath(Sys.BINDIR, Base.DATAROOTDIR, "julia", "base")
             Meta.isexpr(def, :function) || continue
             call = def.args[1]
             Meta.isexpr(call, :call) && call.args[1] === name && sel(call) || continue
-            # (the sources are those of the Base that is loaded: a method of the function at
-            # the definition's line)
-            line = (def.args[2].args[1]::LineNumberNode).line
-            ms = methods(getfield(Base, name))
-            # (a system image stripped of its metadata has no lines to compare)
-            any(m -> m.line == 0, ms) ||
-                any(m -> m.line == line && endswith(String(m.file), basename(file)), ms) ||
-                error("wasm-specialize.jl: `$call` at $file:$line is not a method of the loaded Base " *
-                      "(the sources of the Julia installation differ from its system image)")
+            WasmCodegen.check_base_source("wasm-specialize.jl", call, file,
+                                          (def.args[2].args[1]::LineNumberNode).line)
             return def
         end
         error("wasm-specialize.jl: no definition of $name in $file")

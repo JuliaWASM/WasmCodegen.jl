@@ -44,6 +44,31 @@ const PATCH_SESSION = Ref{Any}(nothing)
 
 latest_global(m::Module, s::Symbol) = Base.invoke_in_world(Base.get_world_counter(), getglobal, m, s)
 
+# The patch files that define methods of Base again from the sources of the Julia installation
+# check that those are the sources of the Base that is loaded: the method of the signature
+# `call` (as Base's sources write it) is defined at `line` of `file`. A system image stripped
+# of its metadata has no line to compare (the method's is 0).
+function check_base_source(patch::String, call::Expr, file::String, line::Int)
+    f = getfield(Base, call.args[1]::Symbol)
+    types = Any[]
+    for a in call.args[2:end]
+        Meta.isexpr(a, :parameters) && continue
+        Meta.isexpr(a, :macrocall) && (a = a.args[end])   # @nospecialize(x::T)
+        rest = Meta.isexpr(a, :...)
+        rest && (a = a.args[1])
+        T = Meta.isexpr(a, :(::)) ? Core.eval(Base, a.args[end]) : Any
+        push!(types, rest ? Vararg{T} : T)
+    end
+    sig = Tuple{typeof(f), types...}
+    for m in methods(f)
+        m.sig == sig || continue
+        (m.line == 0 || (m.line == line && endswith(String(m.file), basename(file)))) && return
+        break
+    end
+    error("$patch: `$call` at $file:$line is not a method of the loaded Base " *
+          "(the sources of the Julia installation differ from its system image)")
+end
+
 """
     with_trim_patches(f; patches=TRIM_PATCHES, bindings=[])
 
