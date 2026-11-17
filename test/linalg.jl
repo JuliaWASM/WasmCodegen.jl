@@ -87,6 +87,39 @@ function la_svd_nonfinite(x::Float64)
             Float64(all(isnan, LinearAlgebra.LAPACK.gesvd!('S', 'S', copy(A))[2])))
 end
 
+# strides: increments other than 1 (negative: from the far end), and views with a row stride
+la_strides(n::Int) = (x = [1.0 * k for k in 1:2n+1]; y = [0.5 * k * k for k in 1:3n+1];
+                      d = BLAS.dot(n, x, 2, y, 3); e = BLAS.dot(n, x, -2, y, 3);
+                      BLAS.axpy!(n, 2.0, x, 2, y, -3); BLAS.scal!(n, 3.0, x, 2);
+                      z = zeros(2n); BLAS.blascopy!(n, x, -2, z, 2);
+                      (d, e, sum(y), y[1], sum(x), x[3], z[1], sum(z)))
+la_strided_views(n::Int) = (A = wmat(6, 5, 0.3); V = view(A, 1:2:5, 2:4); x = view([1.0 * k for k in 1:9], 1:3:7);
+                            y = V * x; W = view(A, 2:4, 1:3) * view(A, 1:3, 2:5);
+                            (y[1], y[3], sum(V' * y), W[1, 1], W[3, 4], dot(x, view(A, 1, 1:3)), norm(view(A, 2, :))))
+# elements near the ends of the floating-point range: the matrix is scaled before the rotations
+la_eig_scaled(s::Float64) = (A = wmat(4, 4, 0.2); E = eigen(Symmetric(s .* (A + A')));
+                             (E.values[1] / s, E.values[end] / s, sum(abs.(E.vectors)), abs(E.vectors[2, 3])))
+la_svd_scaled(s::Float64) = (A = s .* wmat(5, 3, 0.4); F = svd(A);
+                             (F.S[1] / s, F.S[end] / s, sum(abs.(F.U)), sum(abs.(F.Vt)), svdvals(A')[2] / s))
+# `info`: the first zero pivot of `lu`, the zero on the diagonal of a triangular solve, the
+# zero pivot of `bunchkaufman`; and an exactly singular matrix's errors
+function la_info(k::Int)
+    A = [1.0 2.0 3.0; 2.0 4.0 6.0; 1.0 0.0 1.0]
+    k == 0 && return (Float64(lu(A; check=false).info), Float64(issuccess(lu(A; check=false))), 0.0)
+    k == 1 && return (Float64(bunchkaufman(Symmetric(zeros(3, 3)); check=false).info),
+                      Float64(cholesky(Symmetric(-A * A'); check=false).info), 0.0)
+    T = [1.0 2.0 3.0; 0.0 0.0 1.0; 0.0 0.0 2.0]
+    r = try
+        k == 2 ? sum(LinearAlgebra.LAPACK.trtrs!('U', 'N', 'N', T, [1.0, 2.0, 3.0])) : sum(A \ [1.0, 2.0, 3.0])
+    catch e
+        e isa SingularException ? -Float64(e.info) : e isa LinearAlgebra.LAPACKException ? -10.0 - e.info : -100.0
+    end
+    return (r, 0.0, 0.0)
+end
+# a tall matrix: the thin and the full factors
+la_svd_tall(n::Int) = (A = wmat(n + 6, 2, 0.3); F = svd(A); G = svd(A; full=true);
+                       (F.S[1], F.S[2], Float64(size(F.U, 2)), Float64(size(G.U, 2)), sum(abs.(F.U)),
+                        sum(abs.(G.U[:, 1:2])), sum(abs.(G.U' * G.U)), sum(abs.(G.Vt)), sum(abs.(F.U * Diagonal(F.S) * F.Vt - A))))
 # `gesvd` overwriting A with the left or the right singular vectors (its first min(m, n)
 # columns or rows: the rest of A is not defined)
 function la_gesvd_o(s::Float64, tall::Bool, left::Bool)
@@ -128,6 +161,18 @@ end
         @wtest_approx la_qrp_scaled(s)
     end
     @wtest_approx la_inc(3)
+    for n in 1:3
+        @wtest_approx la_strides(n)
+    end
+    @wtest_approx la_strided_views(1)
+    for s in (1e-300, 1.0, 1e200)
+        @wtest_approx la_eig_scaled(s)
+        @wtest_approx la_svd_scaled(s)
+    end
+    for k in 0:3
+        @wtest_approx la_info(k)
+    end
+    @wtest_approx la_svd_tall(1)
     for x in (1.0, 3.0, NaN, Inf, -Inf), upper in (true, false)
         @wtest_approx la_chol_info(x, upper)
     end
