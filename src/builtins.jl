@@ -146,6 +146,14 @@ no_field!(fc::FnCtx, @nospecialize(T), name::Symbol) =
 # TypeError of the builtin
 bad_field_index(@nospecialize(I)) = typeintersect(I, Union{Int,Symbol}) === Union{}
 
+# The index `i` as an Int. (`convert_repr` gives no value for a type without Ints, having
+# emitted `unreachable`: code using its result as an index would be emitted for nothing.)
+function index_value(fc::FnCtx, i::CGVal)
+    idx = convert_repr(fc, i, Int)
+    idx.kind === Bottom && unsupported("an index of type ", i.typ)
+    return idx
+end
+
 "The `TypeError` of the builtin `name` for the field index `i` (see `bad_field_index`)."
 function field_index_error!(fc::FnCtx, name::Symbol, i::CGVal)
     expected = name === :getfield || name === :setfield! ? Union{Int,Symbol} : Symbol
@@ -634,7 +642,7 @@ function isdefined_dynamic!(fc::FnCtx, x::CGVal, i::CGVal)
     T = x.typ
     (T isa DataType && isconcretetype(T) && i.typ === Int) ||
         unsupported("isdefined with a field not known at compile time")
-    idx = convert_repr(fc, i, Int)
+    idx = index_value(fc, i)
     r = new_local!(fc, I32)
     emit!(fc.b, :i32_const, 0); emit!(fc.b, :local_set, r)
     for k in 1:fieldcount(T)
@@ -707,7 +715,7 @@ function checked_field_index!(fc::FnCtx, x::CGVal, i::CGVal)
         push_val!(fc, i); emit!(fc.b, :i64_eqz)
         if!(fc.b); throw_error!(fc, Runtime.throw_field_error, () -> convert_repr(fc, const_value(fc, T), Any), name); end!(fc.b)
     end
-    idx = convert_repr(fc, i, Int)
+    idx = index_value(fc, i)
     push_val!(fc, idx); emit!(fc.b, :i64_const, 1); emit!(fc.b, :i64_sub)
     emit!(fc.b, :i64_const, fieldcount(T)); emit!(fc.b, :i64_ge_u)
     if!(fc.b); throw_error!(fc, Runtime.throw_bounds_error, () -> convert_repr(fc, x, Any), idx); end!(fc.b)
@@ -810,7 +818,7 @@ function tuple_array_get!(fc::FnCtx, x::CGVal, i::CGVal)
     emit!(fc.b, :struct_get, l.wtype, DATA_FIELD)
     arr = new_local!(fc, RefType(ml.array, true))
     emit!(fc.b, :local_set, arr)
-    i = convert_repr(fc, i, Int)
+    i = index_value(fc, i)
     n = x.typ isa DataType && x.typ <: Tuple && !Base.isvatuple(x.typ) ? fieldcount(x.typ) : nothing
     if !(isconstant(i) && n !== nothing && 1 <= constant_value(i) <= n)
         # out of bounds (checked on the 64-bit index): a BoundsError
@@ -1639,7 +1647,7 @@ function fieldtype_dynamic!(fc::FnCtx, @nospecialize(T), f::CGVal, @nospecialize
         push_val!(fc, idx); emit!(fc.b, :i64_eqz)
         if!(fc.b); throw_error!(fc, Runtime.throw_field_error, () -> convert_repr(fc, const_value(fc, T), Any), f); end!(fc.b)
     else
-        idx = convert_repr(fc, f, Int)
+        idx = index_value(fc, f)
         push_val!(fc, idx); emit!(fc.b, :i64_const, 1); emit!(fc.b, :i64_sub)
         emit!(fc.b, :i64_const, n); emit!(fc.b, :i64_ge_u)
         if!(fc.b); throw_error!(fc, Runtime.throw_bounds_error, () -> convert_repr(fc, const_value(fc, T), Any), idx); end!(fc.b)

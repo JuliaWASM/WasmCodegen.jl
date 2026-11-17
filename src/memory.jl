@@ -85,7 +85,7 @@ function emit_memoryrefnew!(fc::FnCtx, args::Vector{Any})
     end
     R = x.typ
     is_memoryref_type(R) || unsupported("memoryrefnew of ", R)
-    i = convert_repr(fc, args[2]::CGVal, Int)
+    i = index_value(fc, args[2]::CGVal)
     bc = length(args) >= 3 ? args[3]::CGVal : const_value(fc, true)
     ml = memory_layout(fc.cgm.types, ref_eltype(R))
     # the new index: ref.index + i - 1, as an i64 to check it
