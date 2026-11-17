@@ -113,6 +113,37 @@ function bigwide_store(o::Int)
                Int(sum(m.w.a)) + Int(sum(m.w.b))
     end
 end
+# a box holding scalars and a tuple's array: the box and the array are both copied
+struct DeepIn
+    s::NTuple{64,UInt8}
+    t::NTuple{80,UInt16}
+    z::UInt32
+end
+mutable struct BigDeep
+    x::UInt32
+    d::DeepIn
+    y::UInt32
+end
+function bigdeep_store(o::Int)
+    d = DeepIn(ntuple(i -> UInt8(i), Val(64)), ntuple(i -> UInt16(i * 257), Val(80)), 0x0a0b0c0d)
+    m = BigDeep(0x01020304, d, 0x05060708)
+    GC.@preserve m begin
+        p = Ptr{UInt8}(pointer_from_objref(m))
+        poke(p, o, 0x5a); poke(p, (o + 70) % sizeof(BigDeep), 0xa5)
+        return wsum(p, 0:sizeof(BigDeep)-1) + Int(sum(d.s)) + Int(sum(d.t)) + Int(d.z) +
+               Int(sum(m.d.s)) + Int(sum(m.d.t)) + Int(m.d.z)
+    end
+end
+# a store into the numeric leaves of a boxed struct with pointers; into a pointer's address
+# there, a trap (the copy would keep the owner of the address replaced)
+function ref_manyfields_store(o::Int)
+    r = Ref(ManyFields(ntuple(i -> Int8(i), Val(20)), C_NULL, ntuple(i -> Int16(i * 300), Val(50)), C_NULL, 0x1122334455667788))
+    GC.@preserve r begin
+        p = Ptr{UInt8}(pointer_from_objref(r))
+        poke(p, o, 0x5a)
+        return wsum(p, [0:19; 32:131; 144:151])
+    end
+end
 # a field of a union of isbits types is stored inline, not as isbits leaves: its bytes (the
 # value's and the selector's) are not addressable, a pointer access traps
 mutable struct BigUnion
@@ -140,6 +171,15 @@ sha_hashes(k::Int) = (s = repeat("abc", k); (hash(SHA.sha512(s)), hash(SHA.sha25
         @wtest bigwide_store(o)
     end
     @wtest bigwide_store(204)    # y
+    D = Int(fieldoffset(BigDeep, 2))
+    for o in (0, D, D + 63, D + 64, D + 65, D + 150, D + 224, D + 227)   # x, d's s, t, z
+        @wtest bigdeep_store(o)
+    end
+    for o in (3, 40, 131, 150)
+        @wtest ref_manyfields_store(o)
+    end
+    r = wasm_run(wcompile(ref_manyfields_store, (Int,)), "ref_manyfields_store", 24; rettype=Int)   # p
+    @test r isa Tuple && r[1] === :trap
     @wtest sha_hashes(1)
     @wtest sha_hashes(100)
     @test sizeof(BigBuf) == 112 && sizeof(BigWords) == 328 && sizeof(BigWide) == 208

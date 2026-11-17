@@ -755,7 +755,9 @@ struct ObjectLeaf
     off::Int
     n::Int
     elem::Union{Nothing,Tuple{TypeRef,Int}}
+    ptr::Bool       # the address of a `Ptr` (its owner is the next field)
 end
+ObjectLeaf(steps, storage, off, n, elem) = ObjectLeaf(steps, storage, off, n, elem, false)
 
 # the leaves of a value of the isbits type `FT` at byte offset `off`, stored in the Wasm
 # fields `ws` (1-based) of the struct type `st` reached by `steps`
@@ -770,7 +772,7 @@ function object_leaves!(out::Vector{ObjectLeaf}, ts::Types, @nospecialize(FT), o
         length(bl) == length(ws) || return push!(out, ObjectLeaf(nothing, I8, off, sizeof(FT), nothing))
         for ((P, poff), w) in zip(bl, ws)
             P === :owner && continue
-            push!(out, ObjectLeaf([steps; (st, w - 1)], fields[w].storage, poff, nbytes(P), nothing))
+            push!(out, ObjectLeaf([steps; (st, w - 1)], fields[w].storage, poff, nbytes(P), nothing, is_ptr_type(FT)))
         end
     elseif l.kind === Inline
         for j in 1:fieldcount(FT)
@@ -972,7 +974,8 @@ function object_byte_access!(b::Builder, f::Func, kind::Symbol, off::Int, boff::
         emit!(b, :local_set, boff)
         emit!(b, :local_get, boff); emit!(b, :i64_const, lf.n); emit!(b, :i64_lt_u)
         if!(b)
-        if lf.steps === nothing
+        if lf.steps === nothing || (kind === :store && lf.ptr && length(lf.steps) > 1)
+            # (a pointer in a box: a copy would keep the owner of the address replaced)
             unreachable!(b)
         elseif kind === :store && (length(lf.steps) > 1 || lf.elem !== nothing)
             store_shared_leaf!(b, f, obj, boff, lf, objs)
@@ -1003,7 +1006,7 @@ function object_byte_access!(b::Builder, f::Func, kind::Symbol, off::Int, boff::
             bits_to_storage!(b, stg)
             emit!(b, :struct_set, sst, w)
         end
-        lf.steps === nothing || return!(b)
+        return!(b)
         end!(b)
     end
     kind === :load && emit!(b, :i32_const, 0)
