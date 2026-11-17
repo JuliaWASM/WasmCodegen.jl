@@ -793,28 +793,28 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
             (gamma == 0 || abs(gamma) <= lim * (sqrt(alpha) * sqrt(beta))) && continue
             zeta = (ldexp(beta, d) - ldexp(alpha, -d)) / (2gamma)
             t = zero(T)
-            if abs(zeta) * sqrt(eps(T)) <= 1
+            if isfinite(zeta)
                 t = copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
-            else
-                # zeta is large (a column small beside the other: it may overflow): the
-                # tangent is 1 / 2zeta (as `gesvj`'s), tau over the 2^|d| of the columns
+            end
+            if abs(t) < floatmin(T)
+                # zeta overflows or the tangent underflows (a column small beside the
+                # other): the tangent is 1 / 2zeta, tau over the 2^|d| of the columns. The
+                # rotation leaves the large column as it is and takes from the small one its
+                # projection on it (as `gesvj`'s; the product is scaled, not the element,
+                # which may underflow)
                 tau = gamma / (d >= 0 ? beta - ldexp(alpha, -2d) : ldexp(beta, 2d) - alpha)
                 t = ldexp(tau, -abs(d))
-                if abs(t) < floatmin(T)
-                    # it underflows: the rotation leaves the large column as it is and takes
-                    # from the small one its projection on it
-                    for i in 1:p
-                        d >= 0 ? (G[i, a] -= tau * ldexp(G[i, b], -d)) :
-                                 (G[i, b] += tau * ldexp(G[i, a], d))
-                    end
-                    for i in 1:q
-                        va, vb = V[i, a], V[i, b]
-                        V[i, a] = va - t * vb
-                        V[i, b] = vb + t * va
-                    end
-                    rotated = true
-                    continue
+                for i in 1:p
+                    d >= 0 ? (G[i, a] -= ldexp(tau * ldexp(G[i, b], -2), 2 - d)) :
+                             (G[i, b] += ldexp(tau * ldexp(G[i, a], -2), 2 + d))
                 end
+                for i in 1:q
+                    va, vb = V[i, a], V[i, b]
+                    V[i, a] = va - t * vb
+                    V[i, b] = vb + t * va
+                end
+                rotated = true
+                continue
             end
             t == 0 && continue
             rotated = true
