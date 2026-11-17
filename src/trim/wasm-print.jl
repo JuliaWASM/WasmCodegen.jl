@@ -25,7 +25,10 @@ let file = joinpath(Sys.BINDIR, Base.DATAROOTDIR, "julia", "base", "strings", "i
     for def in found
         line = (def.args[2].args[1]::LineNumberNode).line
         f = getfield(Base, def.args[1].args[1])
-        any(m -> m.line == line && endswith(String(m.file), "io.jl"), methods(f)) ||
+        ms = methods(f)
+        # (a system image stripped of its metadata has no lines to compare)
+        all(m -> m.line == 0, ms) ||
+            any(m -> m.line == line && endswith(String(m.file), "io.jl"), ms) ||
             error("wasm-print.jl: `$(def.args[1])` at $file:$line is not a method of the loaded Base " *
                   "(the sources of the Julia installation differ from its system image)")
     end
