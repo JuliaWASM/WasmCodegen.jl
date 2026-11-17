@@ -126,6 +126,13 @@ la_svd_tiny32(x::Float32) = (s = svdvals(Float32[1 x; 0 0]); d = svdvals(Float32
 la_svd_skew(x::Float64) = (F = svd([1.0 x; 0.0 x]); (F.S[1], F.S[2] / x, sum(abs2, F.U' * F.U - I), sum(abs2, F.Vt * F.Vt' - I)))
 la_svd_full(n::Int) = (A = [Matrix{Float64}(I, n, n); -ones(1, n)]; F = svd(A; full=true);
                        (sum(abs2, F.U[:, end]), sum(abs2, F.U' * F.U - I), F.S[1], F.S[end]))
+# of rank 1; a column of subnormal elements; norms whose ratio underflows; elements that a
+# scaling of the largest to 1 would lose
+la_svd_orth(F) = (sum(abs2, F.U' * F.U - I), sum(abs2, F.Vt * F.Vt' - I))
+la_svd_rank1(a::Float64, b::Float64) = (F = svd([a b; 4a 4b]; full=true); (F.S[1], la_svd_orth(F)...))
+la_svd_subnormal() = (d = nextfloat(0.0); F = svd([1.0 0.0; 0.0 d; 0.0 d]; full=true); (F.S[1], la_svd_orth(F)...))
+la_svd_ratio(x::Float64, y::Float64) = (F = svd([x y; 0.0 y]); (F.S[1] / x, F.S[2] / y, la_svd_orth(F)...))
+la_svd_range(x::Float64, y::Float64) = (F = svd([x 0.0; 0.0 y]); (F.S[1] / x, F.S[2] / y, la_svd_orth(F)...))
 la_svd_tall(n::Int) = (A = wmat(n + 6, 2, 0.3); F = svd(A); G = svd(A; full=true);
                        (F.S[1], F.S[2], Float64(size(F.U, 2)), Float64(size(G.U, 2)), sum(abs.(F.U)),
                         sum(abs.(G.U[:, 1:2])), sum(abs.(G.U' * G.U)), sum(abs.(G.Vt)), sum(abs.(F.U * Diagonal(F.S) * F.Vt - A))))
@@ -189,6 +196,11 @@ end
         @wtest_approx la_svd_skew(x)
     end
     @wtest_approx la_svd_full(100)
+    @wtest_approx la_svd_rank1(1.0, 4.0)
+    @wtest_approx la_svd_rank1(3.0, 4.0)
+    @wtest_approx la_svd_subnormal()
+    @wtest_approx la_svd_ratio(1e100, 1e-300)
+    @wtest_approx la_svd_range(1e200, 1e-200)
     for x in (1f-40, 1f-30)
         @wtest_approx la_svd_tiny32(x)
     end

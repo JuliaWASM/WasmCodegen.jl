@@ -606,6 +606,19 @@ function jacobi_scale!(X::Matrix{T}) where {T}
     return e
 end
 
+# the same for the one-sided method, which squares no element (the norms and the cosines are
+# of scaled elements): a matrix of small elements is scaled up (its rotations are of
+# subnormal numbers otherwise), one within a factor 1/eps of overflowing down by eps (to
+# largest magnitude 1, the small elements of a matrix as [1e200 0; 0 1e-200] would underflow)
+function jacobi_svd_scale!(X::Matrix{T}) where {T}
+    amax = maximum(abs, X; init=zero(T))
+    (iszero(amax) || !isfinite(amax)) && return 0
+    e = amax < sqrt(floatmin(T) / eps(T)) ? -exponent(amax) :
+        amax > floatmax(T) * eps(T) ? exponent(eps(T)) : 0
+    e == 0 || (X .= ldexp.(X, e))
+    return e
+end
+
 # the norm of the column j of G, of elements scaled by its largest: their squares neither
 # overflow nor underflow
 function column_norm(G::Matrix{T}, j::Int) where {T}
@@ -732,7 +745,7 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
         V[i, i] = one(T)
     end
     finite = all(isfinite, G)
-    e = jacobi_scale!(G)
+    e = jacobi_svd_scale!(G)
     tol = eps(T) * p
     converged = !finite
     for sweep in 1:(finite ? sweeps : 0)
@@ -747,13 +760,29 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
                 g += (G[i, a] / na) * (G[i, b] / nb)
             end
             abs(g) <= tol && continue
-            # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms; where it is large
-            # (a column small beside the other: it may overflow), the tangent is 1 / 2zeta,
-            # of the ratio itself
             r = nb <= na ? nb / na : na / nb
+            if r <= eps(T)
+                # a column negligible beside the other (the ratio of their norms may
+                # underflow): the rotation leaves the large one as it is, to rounding, and
+                # takes from the small one its projection on it. What is left of a column
+                # that was parallel to the other is rounding: none of it
+                big, small = nb <= na ? (a, b) : (b, a)
+                nbig, nsmall = max(na, nb), min(na, nb)
+                for i in 1:p
+                    G[i, small] -= (g * nsmall) * (G[i, big] / nbig)
+                end
+                column_norm(G, small) <= eps(T) * nsmall && (G[:, small] .= zero(T))
+                for i in 1:q
+                    vbig, vsmall = V[i, big], V[i, small]
+                    V[i, small] = vsmall - (g * r) * vbig
+                    V[i, big] = vbig + (g * r) * vsmall
+                end
+                rotated = true
+                continue
+            end
+            # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms
             zeta = (nb <= na ? r - inv(r) : inv(r) - r) / (2g)
-            t = abs(zeta) * sqrt(eps(T)) > 1 ? g * r / (nb <= na ? r^2 - one(T) : one(T) - r^2) :
-                copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
+            t = copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
             t == 0 && continue
             rotated = true
             c = one(T) / sqrt(one(T) + t^2)
@@ -780,7 +809,10 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     L = zeros(T, p, fulll ? p : k)
     for j in 1:k
         c = perm[j]
-        sv[c] > 0 && (L[:, j] .= view(G, :, c) ./ sv[c])
+        sv[c] > 0 || continue
+        # (normalized again: the norm of a column of subnormal elements is rounded)
+        L[:, j] .= view(G, :, c) ./ sv[c]
+        L[:, j] ./= column_norm(L, j)
     end
     ncols = size(L, 2)
     for j in 1:ncols
@@ -802,7 +834,8 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
             d = sum(i -> L[i, r] * v[i], 1:p)
             v .-= d .* view(L, :, r)
         end
-        L[:, j] .= v ./ sqrt(sum(abs2, v))
+        nv = sqrt(sum(abs2, v))
+        nv > 0 && (L[:, j] .= v ./ nv)
     end
     R = zeros(T, q, fullr ? q : k)
     for j in 1:size(R, 2)
