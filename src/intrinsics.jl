@@ -2,8 +2,8 @@
 #
 # Integers narrower than 32 bits live in an `i32`, zero-extended (their bits, and zeros
 # above): the arithmetic that can set the bits above masks its result, and operations that
-# depend on the sign sign-extend their operands first. 128-bit integers are not supported
-# yet.
+# depend on the sign sign-extend their operands first. 128-bit integers are two `i64`s
+# (`intrinsics128.jl`).
 
 const II = Core.Intrinsics
 

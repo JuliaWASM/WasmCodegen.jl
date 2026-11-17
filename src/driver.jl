@@ -26,12 +26,17 @@ struct Compilation
 end
 
 """
-    compile(entries; config=Config(), validate=true) -> Compilation
+    compile(entries; config=Config(), validate=true, world=nothing) -> Compilation
 
 Compile the entry points (`Entry`s, or `(f, argtypes)` tuples) and everything they call
 to a WebAssembly module, as juliac compiles a program: the closed world of the entry
 points is collected, compiled, and the objects it refers to are serialized into the
 module.
+
+The program is compiled as of the latest world, with juliac's patches (`config.trim_patches`).
+With `world`, as of that world, as it is: the patches would be methods of a later world,
+so none is applied (but those of an open session, [`with_trim_patches`](@ref), in the
+worlds it gives).
 """
 function compile(entries::Vector; config::Config=Config(), validate::Bool=true,
                  world::Union{Nothing,UInt}=nothing)
