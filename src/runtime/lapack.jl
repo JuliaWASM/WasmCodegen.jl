@@ -835,7 +835,8 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     end
     sv = T[finite ? column_norm(G, j) : T(NaN) for j in 1:q]
     perm = sortperm(sv; rev=true)
-    S = T[ldexp(sv[perm[j]], -e) for j in 1:k]
+    # (a norm within its rounding of the largest number does not scale back to infinity)
+    S = T[min(ldexp(sv[perm[j]], -e), floatmax(T)) for j in 1:k]
     # the left vectors of G (normalized columns, completed to an orthonormal basis), the right
     # ones V; for Aᵀ they swap
     fulll, fullr = tall ? (fullu, fullv) : (fullv, fullu)
