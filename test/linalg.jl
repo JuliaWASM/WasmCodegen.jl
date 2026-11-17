@@ -50,7 +50,37 @@ la_gesvd(n::Int) = (A = wmat(n + 4, 3, 0.4); F = svd(A; alg=LinearAlgebra.QRIter
                     G = svd(A'; full=true, alg=LinearAlgebra.QRIteration());
                     (F.S[1], F.S[end], sum(abs.(F.U)), sum(abs.(F.Vt)), sum(abs.(G.U)), sum(abs.(G.Vt[1:3, :]))))
 
+# elements near the ends of the floating-point range: the reflectors and the column norms are
+# scaled, as LAPACK's are
+la_qr_scaled(s::Float64) = (A = s .* [1.0 2.0; 3.0 4.0; 5.0 7.0]; F = qr(A); R = F.R;
+                            (R[1, 1] / s, R[1, 2] / s, R[2, 2] / s, sum(Matrix(F.Q))))
+la_qrp_scaled(s::Float64) = (A = s .* [1.0 3.0 0.5; 1.0 4.0 0.1; 0.0 1.0 0.2]; F = qr(A, ColumnNorm());
+                             (Float64(F.p[1]), Float64(F.p[2]), Float64(F.p[3]), abs(F.R[1, 1]) / s))
+# increments: `nrm2` takes negative ones, `asum` and `iamax` do not (a zero one: differs
+# between versions of OpenBLAS)
+la_inc(n::Int) = (x = [1.0, 2.0, 3.0, 4.0, 5.0, -9.0];
+                  (BLAS.nrm2(n, x, -2), BLAS.nrm2(n, x, 2), BLAS.nrm2(1, x, -1),
+                   BLAS.asum(n, x, -2), Float64(BLAS.iamax(n, x, -2))))
+# a long thin matrix (the workspace the routines ask for does not grow with its square)
+la_svd_thin(m::Int) = (A = [sin(0.37i + j) for i in 1:m, j in 1:2]; s = svdvals(A);
+                       F = svd(A; alg=LinearAlgebra.QRIteration()); (s[1], s[2], F.S[1], F.S[2], sum(abs.(F.Vt))))
+# `gesdd` overwriting A with the singular vectors: U where it is tall, Vᵀ where it is wide
+function la_gesdd_o(s::Float64, tall::Bool)
+    A = tall ? [1.0 2.0; 3.0 4.0; 5.0 s] : [1.0 3.0 5.0; 2.0 4.0 s]
+    U, S, VT = LinearAlgebra.LAPACK.gesdd!('O', A)
+    (S[1], S[2], sum(abs.(U)), sum(abs.(VT)), abs(U[1, 1]), abs(VT[2, 2]),
+     Float64(10size(U, 1) + size(U, 2)), Float64(10size(VT, 1) + size(VT, 2)))
+end
+
 @testset "linear algebra" begin
+    for s in (1e-310, 1e-300, 1.0, 1e200, 1e300)
+        @wtest_approx la_qr_scaled(s)
+        @wtest_approx la_qrp_scaled(s)
+    end
+    @wtest_approx la_inc(3)
+    @wtest_approx la_svd_thin(20000)
+    @wtest_approx la_gesdd_o(6.0, true)
+    @wtest_approx la_gesdd_o(6.0, false)
     for n in 0:3, upper in (true, false), rook in (false, true)
         @wtest_approx la_bk(n, upper, rook)
     end

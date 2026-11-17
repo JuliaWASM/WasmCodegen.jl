@@ -7,7 +7,7 @@
 
 module LAPACK
 
-using ..BLAS: ArrayArg, ld, st!, elem, setelem!, notrans, isupper, trsm!
+using ..BLAS: ArrayArg, ld, st!, elem, setelem!, notrans, isupper, trsm!, norm2
 
 setinfo!(info, v::Int) = st!(info, 1, v)
 
@@ -173,21 +173,32 @@ end
 # (beta, tau) with H [alpha; x] = [beta; 0], H = I - tau [1; v] [1; v]ᵀ, x overwritten by v
 function larfg!(n::Int, alpha::T, A, lda::Int, i, j) where {T}
     n <= 1 && return alpha, zero(T)
-    scale, ssq = zero(T), one(T)
-    for k in 1:n-1
-        x = elem(A, lda, i(k), j(k))
-        if x != 0
-            a = abs(x)
-            scale < a ? (ssq = one(T) + ssq * (scale / a)^2; scale = a) : (ssq += (a / scale)^2)
-        end
+    x(k) = elem(A, lda, i(k), j(k))
+    scalx!(f) = for k in 1:n-1
+        setelem!(A, lda, i(k), j(k), f * x(k))
     end
-    xnorm = scale * sqrt(ssq)
+    xnorm = norm2(x, T, n - 1)
     xnorm == 0 && return alpha, zero(T)
     beta = -copysign(hypot(alpha, xnorm), alpha)
+    # a beta too small for 1 / (alpha - beta): the values scaled up first, beta back down after
+    # (`dlarfg`'s)
+    safmin = floatmin(T) / (eps(T) / 2)
+    knt = 0
+    if abs(beta) < safmin
+        while true
+            knt += 1
+            scalx!(inv(safmin))
+            beta *= inv(safmin)
+            alpha *= inv(safmin)
+            (abs(beta) < safmin && knt < 20) || break
+        end
+        xnorm = norm2(x, T, n - 1)
+        beta = -copysign(hypot(alpha, xnorm), alpha)
+    end
     tau = (beta - alpha) / beta
-    f = one(T) / (alpha - beta)
-    for k in 1:n-1
-        setelem!(A, lda, i(k), j(k), f * elem(A, lda, i(k), j(k)))
+    scalx!(one(T) / (alpha - beta))
+    for _ in 1:knt
+        beta *= safmin
     end
     return beta, tau
 end
@@ -233,8 +244,9 @@ function swapcols!(A, lda::Int, p::Int, q::Int, m::Int)
     end
 end
 
+# the 2-norm of A[i0:m, j]
 colnorm(A::ArrayArg{T}, lda::Int, i0::Int, m::Int, j::Int) where {T} =
-    sqrt(sum(k -> abs2(elem(A, lda, k, j)), i0:m; init=zero(T)))
+    norm2(k -> elem(A, lda, i0 + k - 1, j), T, m - i0 + 1)
 
 "`geqp3`: A P = Q R with column pivoting (`dlaqp2`'s), the columns marked in `jpvt` first."
 function geqp3!(m::Int, n::Int, A::ArrayArg{T}, lda::Int, jpvt::ArrayArg{Int}, tau::ArrayArg{T},
@@ -761,6 +773,9 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     return tall ? (S, L, R) : (S, R, L)
 end
 
+# a job character, in lowercase
+job(c::UInt8) = c | 0x20
+
 # the m×c matrix U into the array X (leading dimension ldx), and Vᵀ of the n×r V
 function put_u!(X::ArrayArg{T}, ldx::Int, U::Matrix{T}) where {T}
     for j in 1:size(U, 2), i in 1:size(U, 1)
@@ -774,24 +789,26 @@ function put_vt!(X::ArrayArg{T}, ldx::Int, V::Matrix{T}) where {T}
 end
 
 """`gesdd`: the singular values (descending) of the m×n A and, by `jobz`, none of the
-singular vectors ('N'), the first min(m, n) of each ('S', U m×k, Vᵀ k×n) or all ('A', U
-m×m, Vᵀ n×n). A is destroyed. A workspace query where `lwork` is -1."""
+singular vectors ('N'), the first min(m, n) of each ('S', U m×k, Vᵀ k×n; 'O', the same with
+A overwritten by U where m >= n, else by Vᵀ) or all ('A', U m×m, Vᵀ n×n). A is destroyed. A
+workspace query where `lwork` is -1."""
 function gesdd!(jobz::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::Int, S::ArrayArg{T},
                 U::ArrayArg{T}, ldu::Int, VT::ArrayArg{T}, ldvt::Int, work::ArrayArg{T},
                 lwork::Int, iwork::ArrayArg{Int}, info) where {T}
     setinfo!(info, 0)
     if lwork == -1
-        st!(work, 1, T(max(1, 4 * (m + n)^2)))
+        st!(work, 1, one(T))  # (no workspace is used)
         return
     end
-    full = jobz == UInt8('A') || jobz == UInt8('a')
+    full = job(jobz) == UInt8('a')
     sv, Uc, Vc = jacobi_svd(m, n, A, lda, full, full)
     for j in eachindex(sv)
         st!(S, j, sv[j])
     end
-    (jobz == UInt8('N') || jobz == UInt8('n')) && return
-    put_u!(U, ldu, Uc)
-    put_vt!(VT, ldvt, Vc)
+    job(jobz) == UInt8('n') && return
+    over = job(jobz) == UInt8('o')
+    over && m >= n ? put_u!(A, lda, Uc) : put_u!(U, ldu, Uc)
+    over && m < n ? put_vt!(A, lda, Vc) : put_vt!(VT, ldvt, Vc)
 end
 
 """`gesvd`: as `gesdd`, the left and right singular vectors chosen separately (`jobu`,
@@ -801,10 +818,9 @@ function gesvd!(jobu::UInt8, jobvt::UInt8, m::Int, n::Int, A::ArrayArg{T}, lda::
                 work::ArrayArg{T}, lwork::Int, info) where {T}
     setinfo!(info, 0)
     if lwork == -1
-        st!(work, 1, T(max(1, 4 * (m + n)^2)))
+        st!(work, 1, one(T))  # (no workspace is used)
         return
     end
-    job(c) = c | 0x20  # (lowercase)
     sv, Uc, Vc = jacobi_svd(m, n, A, lda, job(jobu) == UInt8('a'), job(jobvt) == UInt8('a'))
     for j in eachindex(sv)
         st!(S, j, sv[j])
