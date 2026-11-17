@@ -903,6 +903,16 @@ strerror_sum(k::Int) = Int32(sum(codeunits(Base.Libc.strerror(k))))
     native = withenv(() -> dirs(1), env...)
     c = WasmCodegen.compile(dirs, (Int,); config=cfg)
     @test wasm_run(c, "dirs", 1; rettype=Int32, wasi_env=env) == native
+    # an empty variable is the directory (libuv's `uv_os_tmpdir`), not skipped; an unset one is
+    for tmpdir in ("", nothing)
+        env = Dict("TMP" => "/foo/", "HOME" => "/h")
+        tmpdir === nothing || (env["TMPDIR"] = tmpdir)
+        native = Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+            withenv(() -> dirs(1), "TMPDIR" => tmpdir, env...)
+        end
+        @test native == (tmpdir === nothing ? 402 : 2)
+        @test wasm_run(c, "dirs", 1; rettype=Int32, wasi_env=env) == native
+    end
     # the seams of a host with file modes: methods of `WASM_METHODS`, for this test only
     F = WasmCodegen.Runtime.FS
     methods_of(mt) = (ms = Method[]; Base.visit(m -> push!(ms, m), mt); ms)

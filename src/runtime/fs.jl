@@ -2059,13 +2059,14 @@ end
 cwd_restore_wasm(h::SavedCwd) = cd_wasm(h.path)
 
 @noinline tempdir() = original(Base.Filesystem.tempdir)::String
-"`tempdir()`: `TMPDIR`, `TMP`, `TEMP`, `TEMPDIR` of the environment, else `/tmp`, as libuv's."
+"`tempdir()`: the first of `TMPDIR`, `TMP`, `TEMP`, `TEMPDIR` the environment has, even
+empty, else `/tmp`, as libuv's `uv_os_tmpdir`. (Base's warnings of a path that is not a
+directory are log messages, which a trimmed program does not print.)"
 function tempdir_wasm()
     for name in ("TMPDIR", "TMP", "TEMP", "TEMPDIR")
         v = FS.host_env(name)
-        if v !== nothing && !isempty(v)
-            return length(v) > 1 && endswith(v, '/') ? String(chop(v)) : v
-        end
+        v === nothing && continue
+        return length(v) > 1 && endswith(v, '/') ? String(chop(v)) : v
     end
     return "/tmp"
 end
