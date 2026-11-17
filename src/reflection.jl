@@ -176,7 +176,12 @@ new one on each call (`Runtime.type_hash`: natively, in a session of patches, an
 `hash(::Type)` calls it, so it keeps no cache of its own).
 """
 map_value!(cgm::CGModule, @nospecialize(f), @nospecialize(T)) =
-    get!(() -> f(T), get!(() -> IdDict{Any,Any}(), cgm.helpers, (:map_values, f))::IdDict{Any,Any}, T)
+    get!(() -> map_call(cgm, f, T), get!(() -> IdDict{Any,Any}(), cgm.helpers, (:map_values, f))::IdDict{Any,Any}, T)
+
+# (`Runtime.typeinfo_implicit` is Base's, which has the methods of the program: called in the
+# program's world, which the code generator's does not follow)
+map_call(cgm::CGModule, @nospecialize(f), @nospecialize(T)) =
+    f === Runtime.typeinfo_implicit ? Base.invoke_in_world(cgm.world.world, f, T) : f(T)
 
 """
     emit_map_type!(fc, f, T) -> CGVal
