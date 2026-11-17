@@ -544,7 +544,12 @@ rb_sub_c2(i::Int) = try Core.:(<:)(Int, 1) ? 1 : 0 catch e; rb_err(e) end
 # a float of a primitive type that is not Wasm's
 rb_bfloat(a::UInt16, b::UInt16) = reinterpret(UInt16, Base.add_float(reinterpret(Core.BFloat16, a), reinterpret(Core.BFloat16, b)))
 
+# `muladd` of Float16s rounds the product, as natively (where it is not fused)
+rb_muladd16(a::Float16, b::Float16, c::Float16) = muladd(a, b, c)
+
 @testset "builtins on arguments they reject, unset elements, sizes" begin
+    @wtest rb_muladd16(Float16(3.3), Float16(0.7), Float16(-1.1))
+    @wtest rb_muladd16(Float16(1.1), Float16(1.3), Float16(0.4))
     # `<:` of a value that is not a type: a TypeError
     for i in 1:4; @wtest rb_sub(i); end
     for i in (1, 3, 4); @wtest rb_sub_r(i); end

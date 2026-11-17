@@ -554,7 +554,8 @@ end
 
 The intrinsic `f` on Float16 values (Wasm has no half-precision arithmetic): computed in
 Float32 and rounded back to Float16, as LLVM legalizes it, which is exact for the basic
-operations (Float32 has more than twice the bits). Conversions round once.
+operations (Float32 has more than twice the bits). Conversions round once, and `muladd`
+rounds its product (it is not fused, as where LLVM legalizes it to a product and a sum).
 """
 function emit_float16!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal}, @nospecialize(typ))
     if f === II.fptrunc
@@ -582,6 +583,8 @@ function emit_float16!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal}
             emit!(fc.b, :i32_or)
         end
         return emit_bitcast!(fc, Float16, pop_val!(fc, UInt16))
+    elseif f === II.muladd_float
+        return emit_float16!(fc, II.add_float, CGVal[emit_float16!(fc, II.mul_float, args[1:2], typ), args[3]], typ)
     end
     xs = Any[a.typ === Float16 ? float16_to_32!(fc, a) : (isconstant(a) && constant_value(a) === Float16 ? const_value(fc, Float32) : a)
              for a in args]
