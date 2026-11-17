@@ -21,6 +21,9 @@ la_lu(n::Int) = (A = wmat(n + 3, n + 3, 0.3); b = [1.0 * k for k in 1:n+3]; F = 
                  (det(A), sum(A \ b), sum(inv(A)), sum(F.L), sum(F.U), Float64(sum(F.p)), logabsdet(A)[1]))
 la_chol(n::Int) = (A = wmat(n + 3, n + 3, 0.2); A = A' * A; b = [1.0 * k for k in 1:n+3]; C = cholesky(A);
                    (sum(C.U), sum(C \ b), det(C), Float64(isposdef(A)), Float64(isposdef(-A))))
+# a pivot that is not positive is reported, a NaN one is not (OpenBLAS's `potrf`)
+la_chol_info(x::Float64, upper::Bool) = (C = cholesky(Symmetric([4.0 x 1.0; x 1.0 0.0; 1.0 0.0 5.0], upper ? :U : :L); check=false);
+                                         d = C.factors[2, 2]; (Float64(C.info), Float64(isnan(d)), isnan(d) ? 0.0 : d, C.factors[1, 1]))
 la_qr(n::Int) = (A = wmat(n + 4, 4, 0.3); b = [1.0 * k for k in 1:n+4]; F = qr(A);
                  (vec4(F \ b)..., abs(F.R[1, 1]), abs(F.R[4, 4]), sum(abs.(F.Q' * b))))
 la_qrp(n::Int) = (A = wmat(n + 4, 4, 0.3); b = [1.0 * k for k in 1:n+4]; F = qr(A, ColumnNorm());
@@ -78,6 +81,9 @@ end
         @wtest_approx la_qrp_scaled(s)
     end
     @wtest_approx la_inc(3)
+    for x in (1.0, 3.0, NaN, Inf, -Inf), upper in (true, false)
+        @wtest_approx la_chol_info(x, upper)
+    end
     @wtest_approx la_svd_thin(20000)
     @wtest_approx la_gesdd_o(6.0, true)
     @wtest_approx la_gesdd_o(6.0, false)

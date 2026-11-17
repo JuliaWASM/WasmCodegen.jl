@@ -99,8 +99,9 @@ function getri!(n::Int, A::ArrayArg{T}, lda::Int, ipiv::ArrayArg{Int}, work::Arr
     setinfo!(info, 0)
 end
 
-"`potrf`: the Cholesky factor (A = UᵀU or L Lᵀ) in the `uplo` triangle; `info` > 0 where A
-is not positive definite."
+"`potrf`: the Cholesky factor (A = UᵀU or L Lᵀ) in the `uplo` triangle; `info` > 0 at the
+first pivot that is not positive. (A NaN one is not reported, as OpenBLAS's, which Julia
+runs natively, does not: the factor has NaNs from there on. The reference LAPACK reports it.)"
 function potrf!(uplo::UInt8, n::Int, A::ArrayArg{T}, lda::Int, info) where {T}
     up = isupper(uplo)
     # (the factor's element (k, j) of the stored triangle)
@@ -110,7 +111,7 @@ function potrf!(uplo::UInt8, n::Int, A::ArrayArg{T}, lda::Int, info) where {T}
         for k in 1:j-1
             s -= f(k, j)^2
         end
-        if !(s > 0)
+        if s <= 0
             setelem!(A, lda, j, j, s)
             setinfo!(info, j)
             return
