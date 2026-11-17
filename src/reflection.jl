@@ -75,6 +75,9 @@ function emit_subtype!(fc::FnCtx, a::CGVal, b::CGVal)
     return pop_val!(fc, Bool)
 end
 
+"The number of types above which `finish_subtype!` warns of the size of its table (8 MiB)."
+const SUBTYPE_TABLE_WARN = 8192
+
 function finish_subtype!(cgm::CGModule)
     f = get(cgm.helpers, :subtype, nothing)
     f === nothing && return
@@ -82,6 +85,10 @@ function finish_subtype!(cgm::CGModule)
     types = type_objects(cgm)
     n = length(types)
     index = type_index(cgm, types)
+    # (a bit per pair of types: quadratic, 1 MiB of data for 2896 types)
+    n > SUBTYPE_TABLE_WARN &&
+        @warn string("WasmCodegen: the table of `<:` of types known only at run time is of ", n,
+                     " types, ", cld(n * n, 8) >> 20, " MiB of the module")
     bits = zeros(UInt8, cld(n * n, 8))
     for (i, A) in enumerate(types), (j, B) in enumerate(types)
         if A <: B
@@ -145,7 +152,9 @@ function finish_typeof!(cgm::CGModule)
     jl = jlvalue_ref(ts)
     refs = array_type!(ts, jl)
     n = length(ts.typelist)
-    n <= 10_000 || unsupported("typeof of a value of abstract type in a module of more than 10000 types")
+    # (the table is one `array.new_fixed` of an initializer, which engines limit)
+    n <= MAX_FIXED_ELEMENTS ||
+        unsupported("typeof of a value of abstract type in a module of more than ", MAX_FIXED_ELEMENTS, " types")
     elems = Inst[concrete(T) ? Inst(:global_get, object_global!(img, T)) : Inst(:ref_null, ts.jlvalue)
                  for T in ts.typelist]
     table = add_global!(cgm.mod, "jl_typeof_table", RefType(refs, false), false,
@@ -1505,7 +1514,10 @@ function finish_tuple_elems!(cgm::CGModule)
     f = get(cgm.helpers, :type_layout, nothing)
     if f !== nothing
         n = length(ts.typelist)
-        n <= 10_000 || unsupported("objectid of a tuple of a type the module does not have in a module of more than 10000 types")
+        # (as `jl_typeof_table`: one `array.new_fixed`)
+        n <= MAX_FIXED_ELEMENTS ||
+            unsupported("objectid of a tuple of a type the module does not have in a module of more than ",
+                        MAX_FIXED_ELEMENTS, " types")
         i64s = array_type!(ts, I64)
         elems = Inst[Inst(:i64_const, reinterpret(Int64, Runtime.layout_info(T))) for T in ts.typelist]
         table = add_global!(cgm.mod, "jl_type_layout_table", RefType(i64s, false), false,
