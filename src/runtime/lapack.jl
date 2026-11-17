@@ -624,8 +624,11 @@ end
 function column_norm(G::Matrix{T}, j::Int) where {T}
     m = maximum(abs, view(G, :, j); init=zero(T))
     m == 0 && return m
-    # (summed pairwise, as `sum`: a long column of small elements is not rounded away)
-    return m * sqrt(sum(x -> (x / m)^2, view(G, :, j)))
+    # (by a power of two, which rounds nothing; summed pairwise, as `sum`: a long column of
+    # small elements is not rounded away)
+    e = max(exponent(m), exponent(floatmin(T)) + 1)
+    c = ldexp(one(T), -e)
+    return ldexp(sqrt(sum(x -> (x * c)^2, view(G, :, j))), e)
 end
 
 # the sum of the magnitudes of the elements of the column j of G, over n
@@ -642,7 +645,7 @@ function column_cos(G::Matrix{T}, a::Int, b::Int, na::T, nb::T) where {T}
         c += abs(s) >= abs(x) ? (s - t) + x : (x - t) + s
         s = t
     end
-    return s + c
+    return clamp(s + c, -one(T), one(T))
 end
 
 # the sweeps of rotations after which Jacobi's methods give up (they converge quadratically:
