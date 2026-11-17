@@ -765,21 +765,24 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
             if r <= eps(T)
                 # a column negligible beside the other (the ratio of their norms may
                 # underflow): the rotation leaves the large one as it is, to rounding, and
-                # takes from the small one its projection on it. A column left with elements
-                # too small to hold the difference (subnormal: it is no closer to
-                # orthogonal) is none
+                # takes from the small one its projection on it. A column of elements too
+                # small to hold the difference (near subnormal) is projected again; one that
+                # is no closer to orthogonal then is none
                 big, small = nb <= na ? (a, b) : (b, a)
                 nbig, nsmall = max(na, nb), min(na, nb)
-                for i in 1:p
-                    G[i, small] -= (g * nsmall) * (G[i, big] / nbig)
-                end
-                nsmall = column_norm(G, small)
-                if 0 < nsmall < floatmin(T) / eps(T)
-                    g = zero(T)
+                gs = g
+                for again in 1:3
                     for i in 1:p
-                        g += (G[i, small] / nsmall) * (G[i, big] / nbig)
+                        G[i, small] -= (gs * nsmall) * (G[i, big] / nbig)
                     end
-                    abs(g) <= tol || (G[:, small] .= zero(T))
+                    nsmall = column_norm(G, small)
+                    (nsmall == 0 || nsmall >= floatmin(T) / eps(T)) && break
+                    gs = zero(T)
+                    for i in 1:p
+                        gs += (G[i, small] / nsmall) * (G[i, big] / nbig)
+                    end
+                    abs(gs) <= tol && break
+                    again == 3 && (G[:, small] .= zero(T))
                 end
                 for i in 1:q
                     vbig, vsmall = V[i, big], V[i, small]

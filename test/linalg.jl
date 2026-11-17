@@ -136,6 +136,7 @@ la_svd_range(x::Float64, y::Float64) = (F = svd([x 0.0; 0.0 y]); (F.S[1] / x, F.
 # a small column whose part orthogonal to the large one is smaller yet; a subnormal column
 # that is not orthogonal to the other; many more rows than columns
 la_svd_small() = (e = eps(); F = svd([1.0 e; 0.0 e^2 / 2]); (F.S[1], F.S[2] / e^2, la_svd_orth(F)...))
+la_svd_near(y::Float64) = (F = svd([1.0 y; 1.0 2y]); (F.S[1], F.S[2] / y, la_svd_orth(F)...))
 la_svd_stuck() = (F = svd([1.0 nextfloat(0.0); 1.0 0.0]); (F.S[1], la_svd_orth(F)...))
 la_svd_long(n::Int) = (A = zeros(Float32, n, 2); A[1, 1] = 1; A[1, 2] = 0.1f0; A[2, 2] = 1; F = svd(A);
                        (round(Float64(F.S[1]); digits=4), round(Float64(F.S[2]); digits=4)))
@@ -208,6 +209,7 @@ end
     @wtest_approx la_svd_ratio(1e100, 1e-300)
     @wtest_approx la_svd_range(1e200, 1e-200)
     @wtest_approx la_svd_small()
+    @wtest_approx la_svd_near(1e-300)
     @wtest_approx la_svd_stuck()
     @wtest_approx la_svd_long(1_000_000)
     for x in (1f-40, 1f-30)
