@@ -370,7 +370,7 @@ export function makeJuliaIOEvents(opts = {}) {
   // poll sees a timer due before its callback ran, as libuv runs the timers due when it
   // runs); pending: may become ready without the module doing anything
   function isReady(x) {
-    if (!x.fired && !x.immediate && performance.now() >= x.deadline) { disarm(x); x.fired = true; }
+    if (!x.fired && !x.starting && performance.now() >= x.deadline) { disarm(x); x.fired = true; }
     return x.fired;
   }
   const isPending = (x) => !x.fired;
@@ -380,22 +380,31 @@ export function makeJuliaIOEvents(opts = {}) {
     ns = BigInt.asIntN(64, BigInt(ns));
     if (ns < 0n) throw new GuestError(E.INVAL, `timer_start: negative duration ${ns}`);
     const deadline = performance.now() + Number(ns) / 1e6;
-    const x = { kind: 'timer', fired: false, cancelled: false, t: null, immediate: false, deadline, errmsg: '', closed: false };
-    const arm = () => {
-      x.immediate = false;
+    const x = { kind: 'timer', fired: false, cancelled: false, t: null, starting: true, arm: null, deadline, errmsg: '', closed: false };
+    x.arm = () => {
       const ms = deadline - performance.now();
       if (ms <= 0) { x.t = null; x.fired = true; notify(); return; }
-      x.t = setTimeout(arm, Math.min(Math.ceil(ms), 0x7fffffff));
+      x.t = setTimeout(x.arm, Math.min(Math.ceil(ms), 0x7fffffff));
     };
     const h = newHandle(x);
     // (first in the event loop's next turn, even when due: libuv runs a timer of 0 there, so
     // that `sleep(0)` lets the host's other events progress)
-    x.t = setImmediate(arm);
-    x.immediate = true;
+    starting.push(x);
+    if (turn === null) turn = setImmediate(turned);
     return h;
   }
+  // the event loop turned: the timers started since its last turn are all armed at once (a
+  // poll woken by one of them then sees each of them that is due, in the order of deadlines)
+  const starting = [];
+  let turn = null;
+  function turned() {
+    turn = null;
+    const xs = starting.splice(0);
+    for (const x of xs) x.starting = false;
+    for (const x of xs) if (!x.fired && !x.closed) x.arm();
+  }
   function disarm(x) {
-    if (x.t !== null) (x.immediate ? clearImmediate : clearTimeout)(x.t);
+    if (x.t !== null) clearTimeout(x.t);
     x.t = null;
   }
 
@@ -539,6 +548,8 @@ export function makeJuliaIOEvents(opts = {}) {
       waker = null;
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
       for (const x of handles.values()) disarm(x);
+      if (turn !== null) { clearImmediate(turn); turn = null; }
+      starting.length = 0;
     },
   };
 }

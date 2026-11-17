@@ -30,4 +30,19 @@ check('room for 2^30 + 1 past the end', await poll(0, 1, 0n, END - 4, 2 ** 30 + 
 check('room for -1 past the end', await poll(0, 1, 0n, END - 4, -1), -EINVAL);
 check('interest past the end', await poll(END - 4, 2, 0n, 16, 2), -EINVAL);
 
+// timers overdue when a poll that waits starts, before the event loop turned: all of them
+// are ready when it returns, in the order of their deadlines
+{
+  const dv = new DataView(memory.buffer);
+  const hs = [30_000_000n, 10_000_000n, 10_000_000n].map((ns) => events.imports.timer_start(ns));
+  hs.forEach((h, i) => dv.setInt32(4 * i, h, true));
+  const t0 = performance.now();
+  while (performance.now() - t0 < 60);
+  check('overdue timers, before a turn', await poll(0, 3, 0n, 64, 3), 0);
+  check('overdue timers, waited for', await poll(0, 3, -1n, 64, 3), 3);
+  const got = [0, 1, 2].map((i) => dv.getInt32(64 + 4 * i, true));
+  check('overdue timers, their order', got.join(), [hs[1], hs[2], hs[0]].join());
+  hs.forEach((h) => events.imports.close(h));
+}
+
 if (failures.length) console.log(failures.join('\n'));
