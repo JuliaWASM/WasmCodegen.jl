@@ -203,9 +203,11 @@ function get_field(fc::FnCtx, x::CGVal, i::Int)
         return const_value(fc, getfield(constant_value(x), i))
     end
     # an index out of a type's fields (known at compile time): a BoundsError, as natively
+    # (`fieldcount`'s ArgumentError: a type without a definite number of fields)
     nfields = try
         fieldcount(T)
-    catch
+    catch err
+        err isa ArgumentError || rethrow()
         nothing
     end
     # (and below 1, of a type of fields not known at compile time: a tuple of unknown length)
@@ -360,15 +362,11 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
             return throw_error!(fc, Runtime.throw_getfield_index_error,
                                 () -> convert_repr(fc, x, Any), () -> convert_repr(fc, idx, Any))
         end
-        if isconstant(x) && isconstant(idx) && constant_value(x) isa Type
+        if isconstant(x) && isconstant(idx) && constant_value(x) isa Type &&
+           constant_value(idx) isa Union{Symbol,Int} && isdefined(constant_value(x), constant_value(idx))
             # a field of a type (fixed once the type is made; a value of type Type{X}); one it
             # has not is the error below, at run time
-            v = try
-                Some(getfield(constant_value(x), constant_value(idx)))
-            catch
-                nothing
-            end
-            v === nothing || return const_value(fc, something(v))
+            return const_value(fc, getfield(constant_value(x), constant_value(idx)))
         end
         if isconstant(x) && isconstant(idx) && constant_value(x) isa Module && constant_value(idx) isa Symbol
             # (of a module: its global, as natively)

@@ -107,11 +107,14 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
         return is_ptr_type(typ) ? int_ptr!(fc, typ, r) : r
     end
     if all(isconstant, args) && !(f in NO_FOLD)
-        # fold (as inference would have, had it known)
-        try
-            return const_value(fc, f(map(constant_value, args)...))
+        # fold (as inference would have, had it known); an intrinsic that throws on its
+        # constants is emitted, to throw at run time
+        v = try
+            Some(f(map(constant_value, args)...))
         catch
+            nothing
         end
+        v === nothing || return const_value(fc, something(v))
     end
     if !(f in NO_FOLD) && (any(a -> is128(a.typ), args) || (typ isa Type && is128(typ) && f !== II.bitcast))
         r = emit_intrinsic128!(fc, f, args, typ)
