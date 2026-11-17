@@ -122,4 +122,8 @@ end
     @test occursin("boxing the ghost Nothing without its value", msg)
     @test occursin("in the result of :(\$(Expr(:invoke, MethodInstance for ", msg) && occursin("id(::", msg)
     @test sizeof(msg) < 3maxlen
+
+    # the kind of an argument of a C function the runtime implements, misspelled
+    @test WasmCodegen.RuntimeCcall(identity, [:val, :skip]).args == [:val, :skip]
+    @test_throws ArgumentError WasmCodegen.RuntimeCcall(identity, [:val, :ignore])
 end
