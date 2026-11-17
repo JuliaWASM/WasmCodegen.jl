@@ -495,6 +495,9 @@ store_le!(p::Ptr{UInt8}, off::Int, v::UInt64, n::Int) =
 load_le(p::Ptr{UInt8}, off::Int, n::Int) =
     foldl((acc, k) -> acc | UInt64(unsafe_load(p, off + k + 1)) << (8k), 0:n-1; init=UInt64(0))
 
+# a time of `ns` nanoseconds in seconds, rounded as `jl_stat_mtime` rounds a `timespec`
+stat_time(ns::UInt64) = Float64(ns ÷ UInt64(10^9)) + Float64(ns % UInt64(10^9)) * 1e-9
+
 # fill `buf` from the filestat at `fs` (in the linear memory) and the mode `mode`
 function fill_stat!(buf::Ptr{UInt8}, fs::UInt32, mode::UInt32)
     L = Staging.load64
@@ -509,8 +512,8 @@ function fill_stat!(buf::Ptr{UInt8}, fs::UInt32, mode::UInt32)
     store_le!(buf, 40, size, 8)
     store_le!(buf, 48, SYNTH_BLKSIZE, 8)
     store_le!(buf, 56, cld(size, UInt64(512)), 8)
-    store_le!(buf, 64, reinterpret(UInt64, L(fs + UInt32(48)) / 1e9), 8)
-    store_le!(buf, 72, reinterpret(UInt64, L(fs + UInt32(56)) / 1e9), 8)
+    store_le!(buf, 64, reinterpret(UInt64, stat_time(L(fs + UInt32(48)))), 8)
+    store_le!(buf, 72, reinterpret(UInt64, stat_time(L(fs + UInt32(56)))), 8)
     return nothing
 end
 

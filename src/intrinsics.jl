@@ -50,6 +50,13 @@ function push_signed!(fc::FnCtx, v::CGVal)
     sext!(fc, v.typ)
 end
 
+# the Wasm type of the float type `T` of a float intrinsic: of Float32 and Float64 (Float16
+# is `emit_float16!`'s); the floats of other primitive types (`Core.BFloat16`) are not Wasm's
+function float_wtype(fc::FnCtx, @nospecialize(T))
+    T === Float32 || T === Float64 || unsupported("a float intrinsic on values of type ", T)
+    return prim_wtype(fc, T)
+end
+
 const INT_BINOPS = Dict(II.add_int => "add", II.sub_int => "sub", II.mul_int => "mul",
                         II.and_int => "and", II.or_int => "or", II.xor_int => "xor",
                         II.udiv_int => "div_u", II.urem_int => "rem_u",
@@ -139,19 +146,19 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
         return pop_val!(fc, Bool)
     elseif haskey(FLOAT_BINOPS, f)
         a, b = args
-        t = prim_wtype(fc, a.typ)
+        t = float_wtype(fc, a.typ)
         push_val!(fc, a); push_val!(fc, b)
         emit!(fc.b, wop(t, FLOAT_BINOPS[f]))
         return pop_val!(fc, a.typ)
     elseif haskey(FLOAT_CMPS, f)
         a, b = args
-        t = prim_wtype(fc, a.typ)
+        t = float_wtype(fc, a.typ)
         push_val!(fc, a); push_val!(fc, b)
         emit!(fc.b, wop(t, FLOAT_CMPS[f]))
         return pop_val!(fc, Bool)
     elseif haskey(FLOAT_UNOPS, f)
         a = args[1]
-        t = prim_wtype(fc, a.typ)
+        t = float_wtype(fc, a.typ)
         push_val!(fc, a)
         emit!(fc.b, wop(t, FLOAT_UNOPS[f]))
         return pop_val!(fc, a.typ)
@@ -160,7 +167,7 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
         return call_runtime!(fc, Base.fma_emulated, args)
     elseif f === II.muladd_float
         a, b, c = args
-        t = prim_wtype(fc, a.typ)
+        t = float_wtype(fc, a.typ)
         push_val!(fc, a); push_val!(fc, b)
         emit!(fc.b, wop(t, "mul"))
         push_val!(fc, c)
@@ -194,7 +201,7 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
         return emit_int_conversion!(fc, f, constant_value(args[1]), args[2])
     elseif f === II.sitofp || f === II.uitofp
         R = constant_value(args[1]); a = args[2]
-        tr, ta = prim_wtype(fc, R), prim_wtype(fc, a.typ)
+        tr, ta = float_wtype(fc, R), prim_wtype(fc, a.typ)
         f === II.sitofp ? push_signed!(fc, a) : push_val!(fc, a)
         emit!(fc.b, Symbol(wprefix(tr), "_convert_", wprefix(ta), f === II.sitofp ? "_s" : "_u"))
         return pop_val!(fc, R)
@@ -202,7 +209,7 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
         # Julia checks the range before converting (`trunc`): the saturating conversions
         # never trap where the result is undefined
         R = constant_value(args[1]); a = args[2]
-        tr, ta = prim_wtype(fc, R), prim_wtype(fc, a.typ)
+        tr, ta = prim_wtype(fc, R), float_wtype(fc, a.typ)
         push_val!(fc, a)
         emit!(fc.b, Symbol(wprefix(tr), "_trunc_sat_", wprefix(ta), f === II.fptosi ? "_s" : "_u"))
         mask!(fc, R)
@@ -220,7 +227,7 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
     elseif f === II.fpiseq
         # isequal on floats: the same bits, or both NaN
         a, b = args
-        t = prim_wtype(fc, a.typ)
+        t = float_wtype(fc, a.typ)
         it = t === F64 ? I64 : I32
         push_val!(fc, a); emit!(fc.b, Symbol(wprefix(it), "_reinterpret_", wprefix(t)))
         push_val!(fc, b); emit!(fc.b, Symbol(wprefix(it), "_reinterpret_", wprefix(t)))

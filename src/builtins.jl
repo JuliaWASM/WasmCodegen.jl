@@ -142,6 +142,17 @@ is_no_field(@nospecialize(T), @nospecialize(f)) =
 no_field!(fc::FnCtx, @nospecialize(T), name::Symbol) =
     throw_error!(fc, Runtime.throw_field_error, () -> convert_repr(fc, const_value(fc, T), Any), const_value(fc, name))
 
+# whether no value of type `I` is the index of a field (an Int) or its name: natively a
+# TypeError of the builtin
+bad_field_index(@nospecialize(I)) = typeintersect(I, Union{Int,Symbol}) === Union{}
+
+"The `TypeError` of the builtin `name` for the field index `i` (see `bad_field_index`)."
+function field_index_error!(fc::FnCtx, name::Symbol, i::CGVal)
+    expected = name === :getfield || name === :setfield! ? Union{Int,Symbol} : Symbol
+    return throw_error!(fc, Runtime.throw_builtin_type_error, const_value(fc, name),
+                        () -> convert_repr(fc, const_value(fc, expected), Any), () -> convert_repr(fc, i, Any))
+end
+
 """
 Whether a field of a value of type `T` is found by the value's type at run time: `T` is not
 concrete and has no layout of fields of its own (abstract, a `Union`, a `UnionAll`, a tuple of
@@ -332,6 +343,15 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
             return x.vals[constant_value(idx)]
         end
         x = x::CGVal
+        if bad_field_index(idx.typ)
+            # (an ordering is checked first natively; of a module, the error is `getglobal`'s)
+            (length(args) == 2 || (length(args) == 3 && args[3] isa CGVal && args[3].typ === Bool)) ||
+                unsupported("getfield with an ordering and a field of type ", idx.typ)
+            typeintersect(x.typ, Module) === Union{} && return field_index_error!(fc, :getfield, idx)
+            x.typ === Module && return field_index_error!(fc, :getglobal, idx)
+            return throw_error!(fc, Runtime.throw_getfield_index_error,
+                                () -> convert_repr(fc, x, Any), () -> convert_repr(fc, idx, Any))
+        end
         if isconstant(x) && isconstant(idx) && constant_value(x) isa Type
             # a field of a type (fixed once the type is made; a value of type Type{X}); one it
             # has not is the error below, at run time
@@ -365,14 +385,37 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         return get_field_dynamic(fc, x, idx, typ)
     elseif f === Core.setfield!
         x, idx, v = args[1], args[2], args[3]
+        T = x.typ
+        # (the errors of the C runtime, in its order: an immutable value, the index, a const field;
+        # an ordering is checked before them)
+        ordered() = length(args) == 3 || unsupported("setfield! with an ordering, of a value of type ", T)
+        T === Module && ordered() &&
+            return throw_error!(fc, Runtime.throw_error_message, const_value(fc, "cannot assign variables in other modules"))
+        T isa DataType && isconcretetype(T) && !ismutabletype(T) && ordered() &&
+            return throw_error!(fc, Runtime.throw_error_message,
+                                const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
+        # (of a value whose type is not known, natively the errors above may come first)
+        if bad_field_index(idx.typ)
+            (T isa DataType && isconcretetype(T) && ordered()) ||
+                unsupported("setfield! with a field of type ", idx.typ, " of a value of type ", T)
+            return field_index_error!(fc, :setfield!, idx)
+        end
         isconstant(idx) || unsupported("setfield! with a field not known at compile time")
-        is_no_field(x.typ, constant_value(idx)) && return no_field!(fc, x.typ, constant_value(idx))
-        return set_field!(fc, x, field_index(x.typ, constant_value(idx)), v)
+        is_no_field(T, constant_value(idx)) && return no_field!(fc, T, constant_value(idx))
+        i = field_index(T, constant_value(idx))
+        T isa DataType && isconcretetype(T) && isconst(T, i) && ordered() &&
+            return throw_error!(fc, Runtime.throw_error_message,
+                                const_value(fc, string("setfield!: const field .", fieldname(T, i), " of type ", T.name.name, " cannot be changed")))
+        return set_field!(fc, x, i, v)
     elseif f === Core.swapfield! || f === Core.modifyfield! || f === Core.replacefield! ||
            (isdefined(Core, :setfieldonce!) && f === Core.setfieldonce!)
         return emit_atomic_field!(fc, f, args, typ)
     elseif f === Core.isdefined
         x, idx = args[1], args[2]
+        if bad_field_index(idx.typ)
+            length(args) == 2 || unsupported("isdefined with an ordering and a field of type ", idx.typ)
+            return field_index_error!(fc, :isdefined, idx)
+        end
         isconstant(idx) || return isdefined_dynamic!(fc, x, idx)
         is_no_field(x.typ, constant_value(idx)) && return const_value(fc, false)
         return emit_isdefined!(fc, x, field_index(x.typ, constant_value(idx)))
@@ -455,7 +498,9 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         elseif is_memory_type(x.typ)
             n = get_field(fc, x, 1)
             push_val!(fc, n)
-            emit!(fc.b, :i64_const, Base.aligned_sizeof(memory_eltype(x.typ)))
+            # (the size of an element as natively: of an isbits union, with the byte of its
+            # selector; of an atomic memory, with its lock or as a reference)
+            emit!(fc.b, :i64_const, Core.sizeof(Core.memorynew(x.typ, 1)))
             emit!(fc.b, :i64_mul)
             return pop_val!(fc, Int)
         end
@@ -501,7 +546,8 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         return new_expr!(fc, CGVal[a for a in args])
     elseif f === Core.fieldtype && length(args) == 2 && args[1] isa CGVal && isconstant(args[1]) &&
            constant_value(args[1]) isa DataType && isconcretetype(constant_value(args[1])) &&
-           args[2] isa CGVal && (args[2].typ === Symbol || args[2].typ <: Integer)
+           args[2] isa CGVal && (args[2].typ === Symbol || args[2].typ === Int || bad_field_index(args[2].typ))
+        bad_field_index(args[2].typ) && return field_index_error!(fc, :fieldtype, args[2])
         return fieldtype_dynamic!(fc, constant_value(args[1]), args[2], typ)
     elseif f === Core.apply_type
         all(a -> a isa CGVal && isconstant(a), args) &&
@@ -586,7 +632,7 @@ defined (a chain of tests of the index); out of range, false.
 """
 function isdefined_dynamic!(fc::FnCtx, x::CGVal, i::CGVal)
     T = x.typ
-    (T isa DataType && isconcretetype(T) && i.typ <: Integer) ||
+    (T isa DataType && isconcretetype(T) && i.typ === Int) ||
         unsupported("isdefined with a field not known at compile time")
     idx = convert_repr(fc, i, Int)
     r = new_local!(fc, I32)
@@ -1550,6 +1596,29 @@ function emit_apply_iterate!(fc::FnCtx, args::Vector{Any}, @nospecialize(typ))
     end
     emit!(fc.b, :array_copy, ml.array, ml.array)
     ts = fc.cgm.types
+    E = eltype(V)
+    mv = memory_layout(ts, E)
+    if mv.elem.kind !== Ghost && (mv.boxed || mv.elem.kind === Boxed || mv.storage isa RefType)
+        # an element never stored (a null): read as an element of the vector is, an
+        # UndefRefError, or its zero bits where natively it is that (`check_defined!`), which
+        # the tuple then has
+        k = new_local!(fc, I32)
+        # (a reference to the element `k` of the copy; its memory is not read)
+        elem = CGVal(ref.typ, Inline, LeafVal[ref.leaves[1], arr, k])
+        nobc = const_value(fc, false)
+        emit!(fc.b, :i32_const, 0); emit!(fc.b, :local_set, k)
+        block!(fc.b); open_label!(fc)
+        loop!(fc.b); open_label!(fc)
+        emit!(fc.b, :local_get, k); push_val!(fc, n); emit!(fc.b, :i32_wrap_i64)
+        emit!(fc.b, :i32_ge_u)
+        br_if!(fc.b, 1)
+        e = emit_memoryrefget!(fc, elem, nobc, E)
+        zero_defined(E) && emit_memoryrefset!(fc, elem, e, nobc)
+        emit!(fc.b, :local_get, k); emit!(fc.b, :i32_const, 1); emit!(fc.b, :i32_add); emit!(fc.b, :local_set, k)
+        br!(fc.b, 0)
+        end!(fc.b); close_label!(fc)
+        end!(fc.b); close_label!(fc)
+    end
     emit!(fc.b, :i32_const, typeid!(ts, typ))
     emit!(fc.b, :i32_const, 0)
     emit!(fc.b, :local_get, arr)
