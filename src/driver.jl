@@ -123,13 +123,18 @@ end
 The function the entry point `e` exports: the function of `info` where it takes the entry's
 argument types as they are; else (varargs, packed in a tuple; arguments of the method's
 signature wider than the entry's, `@nospecialize`) one taking the entry's arguments (a type
-object, a ghost, takes none) that calls it as a call does.
+object, a ghost, takes none) that calls it as a call does. Where exceptions are caught, the
+call runs with no current exception, as outside any handler (an earlier call an exception
+or a trap left from within a handler did not restore it), and its caller's is restored after
+(an import called in a handler may call an export).
 """
 function entry_function!(cgm::CGModule, info::FuncInfo, e::Entry)
     m = info.mi.def
     spec = Any[Base.unwrap_unionall(info.mi.specTypes).parameters...]
     sig = Any[spec[1], e.argtypes...]
-    (m isa Method && m.isva) || sig != spec || return info.func
+    # (a task's entry clears the current exception itself, and ends in another task)
+    reset = cgm.exceptions !== :none && e.f !== Runtime.Tasks.task_entry
+    (m isa Method && m.isva) || sig != spec || reset || return info.func
     params = ValType[]
     foreach(T -> append!(params, valtypes(cgm, T)), sig)
     f = add_func!(cgm.mod, helper_name(cgm, "entry"), params, info.func.results)
@@ -145,8 +150,17 @@ function entry_function!(cgm::CGModule, info::FuncInfo, e::Entry)
             k += length(l.leaves)
         end
     end
+    if reset
+        exc = current_exception_global!(cgm)
+        saved = new_local!(fc, jlvalue_ref(cgm.types))
+        emit!(fc.b, :global_get, exc); emit!(fc.b, :local_set, saved)
+        emit!(fc.b, :ref_null, cgm.types.jlvalue); emit!(fc.b, :global_set, exc)
+    end
     r = emit_call_info!(fc, info, args)
-    is_unreachable(fc.b) || r.kind === Bottom || push_val!(fc, r)
+    if !is_unreachable(fc.b)
+        reset && (emit!(fc.b, :local_get, saved); emit!(fc.b, :global_set, exc))
+        r.kind === Bottom || push_val!(fc, r)
+    end
     finish!(fc.b)
     return f
 end

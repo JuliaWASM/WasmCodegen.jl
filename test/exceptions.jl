@@ -362,7 +362,22 @@ end
 # an exception nothing catches
 uncaught(i::Int) = i > 0 ? throw(CodedError(i)) : (try i catch; -1 end)
 
+# an exception that leaves the module from within a handler: the next call has no current
+# exception
+function escapes_handler(k::Int)
+    if k == 1
+        try error("boom") catch; error("again") end
+    end
+    try rethrow() catch e; ncodeunits((e::ErrorException).msg::String) end
+end
+
 @testset "exceptions" begin
+    let c = wcompile(escapes_handler, (Int,))
+        @test wasm_run(c, "escapes_handler", 2; rettype=Int) == escapes_handler(2) == 43
+        r = wasm_run(c, "escapes_handler", 1; rettype=Int)
+        @test r isa Tuple && r[1] === :trap
+        @test wasm_run(c, "escapes_handler", 2; rettype=Int) == 43
+    end
     for b in -1:1
         @wtest catch_div(7, b)
     end
