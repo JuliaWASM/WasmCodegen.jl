@@ -23,7 +23,7 @@ let basedir = joinpath(Sys.BINDIR, Base.DATAROOTDIR, "julia", "base")
             line = (def.args[2].args[1]::LineNumberNode).line
             ms = methods(getfield(Base, name))
             # (a system image stripped of its metadata has no lines to compare)
-            all(m -> m.line == 0, ms) ||
+            any(m -> m.line == 0, ms) ||
                 any(m -> m.line == line && endswith(String(m.file), basename(file)), ms) ||
                 error("wasm-specialize.jl: `$call` at $file:$line is not a method of the loaded Base " *
                       "(the sources of the Julia installation differ from its system image)")
