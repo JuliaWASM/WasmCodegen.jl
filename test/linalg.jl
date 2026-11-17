@@ -121,6 +121,11 @@ end
 la_svd_tiny(x::Float64) = (s = svdvals([1.0 x; 0.0 0.0]); d = svdvals([1.0 0.0; 0.0 x]);
                            F = svd([1.0 0.0; 0.0 x]); (s[1], s[2], d[1], d[2] / x, F.S[2] / x, sum(abs.(F.U))))
 la_svd_tiny32(x::Float32) = (s = svdvals(Float32[1 x; 0 0]); d = svdvals(Float32[1 0; 0 x]); (s[1], s[2], d[1], d[2] / x))
+# a column small beside another and not orthogonal to it; the last vector of a full basis
+# far from every unit vector
+la_svd_skew(x::Float64) = (F = svd([1.0 x; 0.0 x]); (F.S[1], F.S[2] / x, sum(abs2, F.U' * F.U - I), sum(abs2, F.Vt * F.Vt' - I)))
+la_svd_full(n::Int) = (A = [Matrix{Float64}(I, n, n); -ones(1, n)]; F = svd(A; full=true);
+                       (sum(abs2, F.U[:, end]), sum(abs2, F.U' * F.U - I), F.S[1], F.S[end]))
 la_svd_tall(n::Int) = (A = wmat(n + 6, 2, 0.3); F = svd(A); G = svd(A; full=true);
                        (F.S[1], F.S[2], Float64(size(F.U, 2)), Float64(size(G.U, 2)), sum(abs.(F.U)),
                         sum(abs.(G.U[:, 1:2])), sum(abs.(G.U' * G.U)), sum(abs.(G.Vt)), sum(abs.(F.U * Diagonal(F.S) * F.Vt - A))))
@@ -180,6 +185,10 @@ end
     for x in (1e-320, 1e-200, 1e-3)
         @wtest_approx la_svd_tiny(x)
     end
+    for x in (5e-309, 1e-200, 1e-9, 0.5)
+        @wtest_approx la_svd_skew(x)
+    end
+    @wtest_approx la_svd_full(100)
     for x in (1f-40, 1f-30)
         @wtest_approx la_svd_tiny32(x)
     end

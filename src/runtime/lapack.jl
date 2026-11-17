@@ -747,11 +747,12 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
                 g += (G[i, a] / na) * (G[i, b] / nb)
             end
             abs(g) <= tol && continue
-            # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms; where it overflows
-            # (a column negligible beside the other), the tangent is 1 / 2zeta
+            # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms; where it is large
+            # (a column small beside the other: it may overflow), the tangent is 1 / 2zeta,
+            # of the ratio itself
             r = nb <= na ? nb / na : na / nb
             zeta = (nb <= na ? r - inv(r) : inv(r) - r) / (2g)
-            t = isinf(zeta) ? g * r / (nb <= na ? r^2 - one(T) : one(T) - r^2) :
+            t = abs(zeta) * sqrt(eps(T)) > 1 ? g * r / (nb <= na ? r^2 - one(T) : one(T) - r^2) :
                 copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
             t == 0 && continue
             rotated = true
@@ -782,24 +783,26 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
         sv[c] > 0 && (L[:, j] .= view(G, :, c) ./ sv[c])
     end
     ncols = size(L, 2)
-    next = 1
     for j in 1:ncols
         sv_j = j <= k ? sv[perm[j]] : zero(T)
         (j <= k && sv_j > 0) && continue
-        # a unit vector orthogonal to the previous columns (Gram-Schmidt on e_next)
-        while next <= p
-            v = zeros(T, p); v[next] = one(T); next += 1
+        # the unit vector farthest from the span of the other columns (one of them is not in
+        # it), orthogonal to them (Gram-Schmidt, twice)
+        far, at = -one(T), 1
+        for i in 1:p
+            d = one(T)
             for r in 1:ncols
-                r == j && continue
-                d = sum(i -> L[i, r] * v[i], 1:p)
-                v .-= d .* view(L, :, r)
+                r == j || (d -= L[i, r]^2)
             end
-            nv = sqrt(sum(abs2, v))
-            if nv > T(0.1)
-                L[:, j] .= v ./ nv
-                break
-            end
+            d > far && ((far, at) = (d, i))
         end
+        v = zeros(T, p); v[at] = one(T)
+        for _ in 1:2, r in 1:ncols
+            r == j && continue
+            d = sum(i -> L[i, r] * v[i], 1:p)
+            v .-= d .* view(L, :, r)
+        end
+        L[:, j] .= v ./ sqrt(sum(abs2, v))
     end
     R = zeros(T, q, fullr ? q : k)
     for j in 1:size(R, 2)
