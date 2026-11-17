@@ -43,11 +43,48 @@ function bigwide(n::Int)
     m = BigWide(0xdeadbeef, w, UInt32(n))
     GC.@preserve m wsum(Ptr{UInt8}(pointer_from_objref(m)), 0:sizeof(BigWide)-1)
 end
-# a store into the small fields of such an object works; into a large field, it traps
+# a store into the fields of such an object: into a large field, into a copy of the tuple's
+# array or the box (values other values may hold)
 function bigbuf_store(o::Int)
     m = BigBuf(ntuple(i -> UInt8(i), Val(100)), 0, 0)
     GC.@preserve m poke(Ptr{UInt8}(pointer_from_objref(m)), o, 0x5a)
     return m.x + Int(m.pad) + Int(m.buf[1])
+end
+function bigbuf_shared(o::Int)
+    t = ntuple(i -> UInt8(i), Val(100))
+    m, m2 = BigBuf(t, 0, 0), BigBuf(t, 0, 0)
+    before = m.buf
+    GC.@preserve m poke(Ptr{UInt8}(pointer_from_objref(m)), o, 0x5a)
+    return Int(m.buf[o+1]) + 1000Int(before[o+1]) + 1000000Int(m2.buf[o+1]) + Int(t[o+1]) + Int(sum(m.buf))
+end
+function bigwords_store(o::Int)
+    m = BigWords(0x0102030405060708, ntuple(i -> UInt32(i * 0x01010101), Val(80)))
+    GC.@preserve m begin
+        p = Ptr{UInt8}(pointer_from_objref(m))
+        poke(p, o, 0x5a); poke(p, o + 5, 0xa5)
+        wsum(p, 0:sizeof(BigWords)-1)
+    end
+end
+# elements of a large tuple stored whole (StaticArrays' `setindex!` of an `MArray`)
+mutable struct BigMat
+    data::NTuple{81,Float64}
+    BigMat() = new()
+end
+@noinline setel!(m::BigMat, x::Float64, i::Int) =
+    GC.@preserve m unsafe_store!(Base.unsafe_convert(Ptr{Float64}, pointer_from_objref(m)), x, i)
+function bigmat(x::Float64)
+    m = BigMat()
+    for i in 1:81
+        setel!(m, x + i, i)
+    end
+    t = m.data
+    setel!(m, -1.0, 81)
+    return (sum(t), sum(m.data), t[81], m.data[81])
+end
+function bigref_store(k::Int)
+    r = Ref{NTuple{80,UInt8}}(ntuple(i -> UInt8(i), Val(80)))
+    GC.@preserve r unsafe_store!(Ptr{UInt8}(Base.unsafe_convert(Ptr{NTuple{80,UInt8}}, r)), 0xff, k)
+    return Int(r[][k]) + Int(r[][k+1])
 end
 
 # a Ref of a large isbits struct with pointer fields: bytes
@@ -64,11 +101,17 @@ function ref_manyfields(n::Int)
     r = Ref(ManyFields(ntuple(i -> Int8(i + n), Val(20)), C_NULL, ntuple(i -> Int16(i * 300 + n), Val(50)), C_NULL, 0x1122334455667788))
     GC.@preserve r wsum(Ptr{UInt8}(pointer_from_objref(r)), [0:19; 24:31; 32:131; 136:143; 144:151])
 end
-# a store into a byte of a large field (shared box or tuple array) traps, not a silent no-op
+# a store into a byte of a large field (a box holding tuples' arrays): the value read
+# before keeps its bytes
 function bigwide_store(o::Int)
-    m = BigWide(0x01020304, Wide(ntuple(i -> UInt16(i), Val(40)), ntuple(i -> UInt32(i), Val(30))), 0x05060708)
-    GC.@preserve m poke(Ptr{UInt8}(pointer_from_objref(m)), o, 0x5a)
-    return Int(m.x) + Int(m.y)
+    w = Wide(ntuple(i -> UInt16(i), Val(40)), ntuple(i -> UInt32(i), Val(30)))
+    m = BigWide(0x01020304, w, 0x05060708)
+    GC.@preserve m begin
+        p = Ptr{UInt8}(pointer_from_objref(m))
+        poke(p, o, 0x5a)
+        return Int(m.x) + Int(m.y) + wsum(p, 0:sizeof(BigWide)-1) + Int(sum(w.a)) + Int(sum(w.b)) +
+               Int(sum(m.w.a)) + Int(sum(m.w.b))
+    end
 end
 # a field of a union of isbits types is stored inline, not as isbits leaves: its bytes (the
 # value's and the selector's) are not addressable, a pointer access traps
@@ -93,8 +136,10 @@ sha_hashes(k::Int) = (s = repeat("abc", k); (hash(SHA.sha512(s)), hash(SHA.sha25
 @testset "pointer bytes of large isbits fields" begin
     @wtest ref_manyfields(3)
     @wtest bigwide_store(0)      # x: a small field
-    r = wasm_run(wcompile(bigwide_store, (Int,)), "bigwide_store", 8; rettype=Int)   # inside w
-    @test r isa Tuple && r[1] === :trap
+    for o in (4, 7, 83, 84, 85, 203)    # inside w: its tuples of 2- and 4-byte elements
+        @wtest bigwide_store(o)
+    end
+    @wtest bigwide_store(204)    # y
     @wtest sha_hashes(1)
     @wtest sha_hashes(100)
     @test sizeof(BigBuf) == 112 && sizeof(BigWords) == 328 && sizeof(BigWide) == 208
@@ -103,9 +148,15 @@ sha_hashes(k::Int) = (s = repeat("abc", k); (hash(SHA.sha512(s)), hash(SHA.sha25
     @wtest bigwide(7)
     @wtest bigbuf_store(104)     # x
     @wtest bigbuf_store(100)     # pad
-    c = wcompile(bigbuf_store, (Int,))
-    r = wasm_run(c, "bigbuf_store", 0; rettype=Int)
-    @test r isa Tuple && r[1] === :trap
+    @wtest bigbuf_store(0)       # buf
+    for o in (0, 37, 99)
+        @wtest bigbuf_shared(o)
+    end
+    for o in (8, 9, 150, 322)
+        @wtest bigwords_store(o)
+    end
+    @wtest bigmat(1.5)
+    @wtest bigref_store(5)
     U, X = Int(fieldoffset(BigUnion, 2)), Int(fieldoffset(BigUnion, 3))
     @wtest bigunion_load(3)
     @wtest bigunion_load(X)

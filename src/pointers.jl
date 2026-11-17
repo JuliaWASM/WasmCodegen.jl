@@ -891,12 +891,78 @@ function push_leaf_steps!(b::Builder, obj::Int, steps, stg::Union{Nothing,Storag
     end
 end
 
+# store the byte in local 2 at byte offset `boff` (a local) of the leaf `lf` of a large
+# immutable field of the object in the local `obj`: the field's boxes and its tuple's array
+# are values other values may share, so the object gets copies of them with the byte replaced
+function store_shared_leaf!(b::Builder, f::Func, obj::Int, boff::Int, lf::ObjectLeaf, locals::Dict{Any,Int})
+    steps, stg = lf.steps::Vector{Tuple{TypeRef,Int}}, lf.storage
+    loc(key, t) = get!(() -> add_local!(f, t), locals, key)
+    # the boxes on the way to the leaf (the one each step but the last reads)
+    olds = Int[]
+    emit!(b, :local_get, obj)
+    for k in 1:length(steps)-1
+        sst, w = steps[k]
+        inner = steps[k+1][1]
+        emit!(b, :struct_get, sst, w); emit!(b, :ref_cast, inner)
+        push!(olds, loc((:old, k, inner), RefType(inner, true)))
+        emit!(b, :local_tee, olds[end])
+    end
+    sst, w = steps[end]
+    if lf.elem !== nothing
+        # a copy of the array, the byte's element replaced in it
+        at, s = lf.elem
+        a, new = loc((:old, at), RefType(at, true)), loc((:new, at), RefType(at, true))
+        eoff = loc(:eoff, I64)
+        emit!(b, :struct_get, sst, w); emit!(b, :ref_cast, at); emit!(b, :local_tee, a)
+        emit!(b, :array_len); emit!(b, :array_new_default, at); emit!(b, :local_set, new)
+        emit!(b, :local_get, new); emit!(b, :i32_const, 0); emit!(b, :local_get, a); emit!(b, :i32_const, 0)
+        emit!(b, :local_get, a); emit!(b, :array_len)
+        emit!(b, :array_copy, at, at)
+        push_byte_elem!(b, new, boff, s)
+        push_byte_elem!(b, new, boff, s)
+        get_elem_bits!(b, at, stg)
+        emit!(b, :local_get, boff); emit!(b, :i64_const, s); emit!(b, :i64_rem_u)
+        emit!(b, :local_set, eoff)
+        replace_byte!(b, eoff)
+        bits_to_storage!(b, stg)
+        emit!(b, :array_set, at)
+        val = new
+    else
+        emit!(b, stg isa PackedType ? :struct_get_u : :struct_get, sst, w)
+        storage_to_bits!(b, stg)
+        replace_byte!(b, boff)
+        bits_to_storage!(b, stg)
+        vt = stg isa PackedType ? I32 : stg
+        val = loc((:val, vt), vt)
+        emit!(b, :local_set, val)
+    end
+    # copies of the boxes from the innermost, each holding the copy made before it
+    for k in length(steps):-1:2
+        sst, w = steps[k]
+        old = olds[k-1]
+        fields = (typedef(b.mod, sst).comp::StructType).fields
+        for i in 0:length(fields)-1
+            if i == w
+                emit!(b, :local_get, val)
+            else
+                emit!(b, :local_get, old)
+                emit!(b, fields[i+1].storage isa PackedType ? :struct_get_u : :struct_get, sst, i)
+            end
+        end
+        emit!(b, :struct_new, sst)
+        val = loc((:new, k, sst), RefType(sst, true))
+        emit!(b, :local_set, val)
+    end
+    sst, w = steps[1]
+    emit!(b, :local_get, obj); emit!(b, :local_get, val); emit!(b, :struct_set, sst, w)
+end
+
 # the byte at offset `off` of a mutable object of struct type `st` (local 1), among its
 # isbits leaves; a padding byte reads as zero. A byte of a large immutable field (in a box
-# or a tuple's array, which other values may share) is read there; storing into it, or
-# accessing a byte whose field isn't addressable, traps
+# or a tuple's array, which other values may share) is read there, and stored into a copy
+# (`store_shared_leaf!`); accessing a byte whose field isn't addressable traps
 function object_byte_access!(b::Builder, f::Func, kind::Symbol, off::Int, boff::Int,
-                             st::TypeRef, leaves::Vector{ObjectLeaf}, objs::Dict{TypeRef,Int})
+                             st::TypeRef, leaves::Vector{ObjectLeaf}, objs::Dict{Any,Int})
     obj = get!(() -> add_local!(f, RefType(st, true)), objs, st)
     emit!(b, :local_get, 1); emit!(b, :ref_cast, st); emit!(b, :local_set, obj)
     for lf in leaves
@@ -906,8 +972,10 @@ function object_byte_access!(b::Builder, f::Func, kind::Symbol, off::Int, boff::
         emit!(b, :local_set, boff)
         emit!(b, :local_get, boff); emit!(b, :i64_const, lf.n); emit!(b, :i64_lt_u)
         if!(b)
-        if lf.steps === nothing || (kind === :store && (length(lf.steps) > 1 || lf.elem !== nothing))
+        if lf.steps === nothing
             unreachable!(b)
+        elseif kind === :store && (length(lf.steps) > 1 || lf.elem !== nothing)
+            store_shared_leaf!(b, f, obj, boff, lf, objs)
         elseif kind === :load && lf.elem !== nothing
             at, s = lf.elem
             push_leaf_steps!(b, obj, lf.steps, nothing)
@@ -935,7 +1003,7 @@ function object_byte_access!(b::Builder, f::Func, kind::Symbol, off::Int, boff::
             bits_to_storage!(b, stg)
             emit!(b, :struct_set, sst, w)
         end
-        lf.steps === nothing || (kind === :store && (length(lf.steps) > 1 || lf.elem !== nothing)) || return!(b)
+        lf.steps === nothing || return!(b)
         end!(b)
     end
     kind === :load && emit!(b, :i32_const, 0)
@@ -1096,7 +1164,7 @@ function finish_pointers!(cgm::CGModule)
             return!(b)
             end!(b)
         end
-        objs = Dict{TypeRef,Int}()
+        objs = Dict{Any,Int}()
         for (id, st, leaves) in objects
             emit!(b, :local_get, tid); emit!(b, :i32_const, id); emit!(b, :i32_eq)
             if!(b)
