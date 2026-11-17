@@ -670,8 +670,8 @@ function syevr!(jobz::UInt8, range::UInt8, uplo::UInt8, n::Int, A::ArrayArg{T}, 
                 iwork::ArrayArg{Int}, liwork::Int, info) where {T}
     setinfo!(info, 0)
     if lwork == -1 || liwork == -1
-        st!(work, 1, T(max(1, 26n)))
-        st!(iwork, 1, max(1, 10n))
+        st!(work, 1, one(T))  # (no workspace is used)
+        st!(iwork, 1, 1)
         return
     end
     S = Matrix{T}(undef, n, n)
