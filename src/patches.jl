@@ -138,6 +138,25 @@ function trim_method_callee(ex)
     return sig.args[1]
 end
 
+# The types of the positional arguments of a method definition, as written (`Any` for one
+# without a type): of `f(x::T)`, of `f(@nospecialize(x::T))`.
+function trim_method_argtypes(ex)
+    while ex.head === :macrocall
+        ex = ex.args[end]
+    end
+    sig = ex.args[1]
+    while sig isa Expr && sig.head in (:where, :(::))
+        sig = sig.args[1]
+    end
+    types = Any[]
+    for a in sig.args[2:end]
+        Meta.isexpr(a, :parameters) && continue
+        Meta.isexpr(a, :macrocall) && (a = a.args[end])
+        push!(types, Meta.isexpr(a, :(::)) ? a.args[end] : :Any)
+    end
+    return types
+end
+
 # The name of a method definition's function.
 function trim_method_name(ex)
     name = trim_method_callee(ex)
@@ -156,13 +175,14 @@ function resident_trim_expr(ex)
         return nothing
     end
     name = trim_method_name(ex)
+    # (the definition's arguments, as written: `x::T` or `@nospecialize(x::T)`)
+    argtypes = name === nothing ? Any[] : trim_method_argtypes(ex)
     # LazyLibraryPath's restricted implementation also belongs only to Wasm.
-    lazy_string = name === :string && occursin("LazyLibraryPath", string(ex.args[1]))
+    lazy_string = name === :string && argtypes == Any[:LazyLibraryPath]
     # Native type repr is executable Julia in package-loader subprocesses;
     # juliac's unqualified names are only valid for Wasm display. The enum
     # printer likewise restricts module contexts that native Julia supports.
-    nonresident_show = name === :show &&
-        (occursin("T::Type", string(ex.args[1])) || occursin("x::Enums.Enum", string(ex.args[1])))
+    nonresident_show = name === :show && (argtypes == Any[:IO, :Type] || argtypes == Any[:IO, :(Enums.Enum)])
     if name in NONRESIDENT_TRIM_NAMES || lazy_string || nonresident_show
         overlay = Expr(:macrocall, GlobalRef(Runtime, Symbol("@wasm_method")),
                        LineNumberNode(0), ex)
