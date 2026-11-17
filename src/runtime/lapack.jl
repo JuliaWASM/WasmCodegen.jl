@@ -606,6 +606,21 @@ function jacobi_scale!(X::Matrix{T}) where {T}
     return e
 end
 
+# the norm of the column j of G, of elements scaled by its largest: their squares neither
+# overflow nor underflow
+function column_norm(G::Matrix{T}, j::Int) where {T}
+    m = zero(T)
+    for i in axes(G, 1)
+        m = max(m, abs(G[i, j]))
+    end
+    m == 0 && return m
+    s = zero(T)
+    for i in axes(G, 1)
+        s += (G[i, j] / m)^2
+    end
+    return m * sqrt(s)
+end
+
 # the sweeps of rotations after which Jacobi's methods give up (they converge quadratically:
 # a matrix of finite elements takes about ten)
 const JACOBI_SWEEPS = 100
@@ -723,16 +738,23 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
     for sweep in 1:(finite ? sweeps : 0)
         rotated = false
         for b in 2:q, a in 1:b-1
-            alpha = beta = gamma = zero(T)
+            # (the columns' norms and the cosine of their angle of scaled elements: a column
+            # of small elements has squares that underflow)
+            na, nb = column_norm(G, a), column_norm(G, b)
+            (na == 0 || nb == 0) && continue
+            g = zero(T)
             for i in 1:p
-                alpha += G[i, a]^2; beta += G[i, b]^2; gamma += G[i, a] * G[i, b]
+                g += (G[i, a] / na) * (G[i, b] / nb)
             end
-            # (the norms' product, and zeta's, without overflow: G is scaled only to below
-            # sqrt(floatmax), its squares' sums to below floatmax)
-            (gamma == 0 || abs(gamma) <= tol * (sqrt(alpha) * sqrt(beta))) && continue
+            abs(g) <= tol && continue
+            # zeta = (nb² - na²) / (2 na nb g), of the ratio of the norms; where it overflows
+            # (a column negligible beside the other), the tangent is 1 / 2zeta
+            r = nb <= na ? nb / na : na / nb
+            zeta = (nb <= na ? r - inv(r) : inv(r) - r) / (2g)
+            t = isinf(zeta) ? g * r / (nb <= na ? r^2 - one(T) : one(T) - r^2) :
+                copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
+            t == 0 && continue
             rotated = true
-            zeta = (beta - alpha) / (2gamma)
-            t = copysign(one(T), zeta) / (abs(zeta) + hypot(one(T), zeta))
             c = one(T) / sqrt(one(T) + t^2)
             s = c * t
             for i in 1:p
@@ -748,7 +770,7 @@ function jacobi_svd(m::Int, n::Int, A::ArrayArg{T}, lda::Int, fullu::Bool, fullv
         end
         rotated || (converged = true; break)
     end
-    sv = T[finite ? sqrt(sum(abs2, view(G, :, j))) : T(NaN) for j in 1:q]
+    sv = T[finite ? column_norm(G, j) : T(NaN) for j in 1:q]
     perm = sortperm(sv; rev=true)
     S = T[ldexp(sv[perm[j]], -e) for j in 1:k]
     # the left vectors of G (normalized columns, completed to an orthonormal basis), the right

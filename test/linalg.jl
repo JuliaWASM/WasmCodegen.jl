@@ -117,6 +117,10 @@ function la_info(k::Int)
     return (r, 0.0, 0.0)
 end
 # a tall matrix: the thin and the full factors
+# columns whose norms' squares underflow, or whose ratio's overflows
+la_svd_tiny(x::Float64) = (s = svdvals([1.0 x; 0.0 0.0]); d = svdvals([1.0 0.0; 0.0 x]);
+                           F = svd([1.0 0.0; 0.0 x]); (s[1], s[2], d[1], d[2] / x, F.S[2] / x, sum(abs.(F.U))))
+la_svd_tiny32(x::Float32) = (s = svdvals(Float32[1 x; 0 0]); d = svdvals(Float32[1 0; 0 x]); (s[1], s[2], d[1], d[2] / x))
 la_svd_tall(n::Int) = (A = wmat(n + 6, 2, 0.3); F = svd(A); G = svd(A; full=true);
                        (F.S[1], F.S[2], Float64(size(F.U, 2)), Float64(size(G.U, 2)), sum(abs.(F.U)),
                         sum(abs.(G.U[:, 1:2])), sum(abs.(G.U' * G.U)), sum(abs.(G.Vt)), sum(abs.(F.U * Diagonal(F.S) * F.Vt - A))))
@@ -173,6 +177,12 @@ end
         @wtest_approx la_info(k)
     end
     @wtest_approx la_svd_tall(1)
+    for x in (1e-320, 1e-200, 1e-3)
+        @wtest_approx la_svd_tiny(x)
+    end
+    for x in (1f-40, 1f-30)
+        @wtest_approx la_svd_tiny32(x)
+    end
     for x in (1.0, 3.0, NaN, Inf, -Inf), upper in (true, false)
         @wtest_approx la_chol_info(x, upper)
     end
