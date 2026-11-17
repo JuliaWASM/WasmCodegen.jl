@@ -129,9 +129,9 @@ The function the entry point `e` exports: the function of `info` where it takes 
 argument types as they are; else (varargs, packed in a tuple; arguments of the method's
 signature wider than the entry's, `@nospecialize`) one taking the entry's arguments (a type
 object, a ghost, takes none) that calls it as a call does. Where exceptions are caught, the
-call runs with no current exception, as outside any handler (an earlier call an exception
-or a trap left from within a handler did not restore it), and its caller's is restored after
-(an import called in a handler may call an export).
+call runs with no current exception, as outside any handler (an earlier call a trap left
+from within a handler did not restore it), and its caller's is restored after, when it
+returns and when it throws (an import called in a handler may call an export).
 """
 function entry_function!(cgm::CGModule, info::FuncInfo, e::Entry)
     m = info.mi.def
@@ -161,10 +161,24 @@ function entry_function!(cgm::CGModule, info::FuncInfo, e::Entry)
         emit!(fc.b, :global_get, exc); emit!(fc.b, :local_set, saved)
         emit!(fc.b, :ref_null, cgm.types.jlvalue); emit!(fc.b, :global_set, exc)
     end
+    if reset
+        # (whatever leaves the call, an exception of the module's or of the host's, is thrown
+        # on once the caller's is restored)
+        block!(fc.b, RefType(:exn, false))
+        try_table!(fc.b, :empty, [(3, nothing, 0)])
+    end
     r = emit_call_info!(fc, info, args)
     if !is_unreachable(fc.b)
         reset && (emit!(fc.b, :local_get, saved); emit!(fc.b, :global_set, exc))
         r.kind === Bottom || push_val!(fc, r)
+        reset && emit!(fc.b, :return)
+    end
+    if reset
+        end!(fc.b)
+        unreachable!(fc.b)
+        end!(fc.b)
+        emit!(fc.b, :local_get, saved); emit!(fc.b, :global_set, exc)
+        throw_ref!(fc.b)
     end
     finish!(fc.b)
     return f
