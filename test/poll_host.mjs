@@ -59,4 +59,33 @@ check('interest past the end', await poll(END - 4, 2, 0n, 16, 2), -EINVAL);
   [a, b].forEach((h) => events.imports.close(h));
 }
 
+// the same within a poll with a timeout, which elapses before the loop turns
+{
+  const dv = new DataView(memory.buffer);
+  const spin = (ms) => { const end = performance.now() + ms; while (performance.now() < end); };
+  const a = events.imports.timer_start(80_000_000n);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((done) => setImmediate(async () => {
+    const b = events.imports.timer_start(10_000_000n);
+    dv.setInt32(0, a, true); dv.setInt32(4, b, true);
+    spin(100);
+    const p = poll(0, 2, 1_000_000n, 64, 2);
+    spin(10);
+    check('an armed and a starting timer, the timeout elapsed', await p, 2);
+    check('an armed and a starting timer, the timeout elapsed, their order', [dv.getInt32(64, true), dv.getInt32(68, true)].join(), [b, a].join());
+    [a, b].forEach((h) => events.imports.close(h));
+    done();
+  }));
+}
+
+// a timeout shorter than the clock's resolution
+{
+  const h = events.imports.timer_start(200_000_000n);
+  new DataView(memory.buffer).setInt32(0, h, true);
+  const t0 = performance.now();
+  check('a timeout of a nanosecond', await poll(0, 1, 1n, 64, 1), 0);
+  check('a timeout of a nanosecond, in time', performance.now() - t0 < 100, true);
+  events.imports.close(h);
+}
+
 if (failures.length) console.log(failures.join('\n'));

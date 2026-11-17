@@ -298,9 +298,10 @@ function task_entry(id::Int32)::Int32
         call_body(t.code, t)
     end
     finish!(t)
+    # (the task keeps its id while it idles: the host's loop turns by a switch to itself)
+    nxt = idle_next()
     TASKS[id] = nothing
     delete!(IDS, t)
-    nxt = idle_next()
     # (the next task's id first: it must differ from this one, which is free once its stack
     # can no longer run: no task runs before `host_exit`)
     nxt === nothing || set_task_tid(nxt, Cint(0))

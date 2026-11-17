@@ -539,6 +539,15 @@ function many_timers_due()
     println(Core.stdout, "many timers due, in order ", out == [1031:1100; 1:1030], " ", length(out))
 end
 
+# a task that ends with nothing to run, with more handles than a host poll takes
+function many_timers_idle()
+    tms = [Timer(60) for _ in 1:1025]
+    t = @async nothing
+    sleep(0.05)
+    foreach(close, tms)
+    println(Core.stdout, "many timers, a task ended: ", istaskdone(t))
+end
+
 # `@sync` of a Channel of an element type other than `Any`
 function sync_typed_channel()
     q = Channel{Any}(2)
@@ -617,6 +626,7 @@ function main()::Int32
     waiting_threads()
     many_timers()
     many_timers_due()
+    many_timers_idle()
     sync_typed_channel()
     sync_own_wait()
     threads_loops()

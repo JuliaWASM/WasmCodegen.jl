@@ -465,18 +465,20 @@ export function makeJuliaIOEvents(opts = {}) {
       if (timeout_ns > 0n) {
         // (armed again until the deadline: a timeout is at most 2^31 - 1 ms, 24.8 days)
         const deadline = performance.now() + Number(timeout_ns) / 1e6;
-        const arm = () => {
+        // (the first time in a turn of its own, whatever is left: the poll waits by then)
+        const arm = (first) => {
           const ms = deadline - performance.now();
-          if (ms <= 0) { pollTimer = null; timedOut = true; notify(); return; }
-          pollTimer = setTimeout(arm, Math.min(Math.ceil(ms), 0x7fffffff));
+          if (ms <= 0 && first !== true) { pollTimer = null; timedOut = true; notify(); return; }
+          pollTimer = setTimeout(arm, Math.min(Math.max(Math.ceil(ms), 0), 0x7fffffff));
         };
-        arm();
+        arm(true);
       }
       for (;;) {
         await new Promise((r) => { waker = r; });
         waker = null;
         const ready = readyOf(interest, cap);
-        if ((ready.length && !startingDue(interest)) || timedOut) return writeReady(ready, out_off);
+        // (a starting timer that is due is armed, and wakes the poll, within a turn)
+        if ((ready.length || timedOut) && !startingDue(interest)) return writeReady(ready, out_off);
         if (timeout_ns === -1n && !anyPending(interest)) {
           lastError = 'poll: no handle of the interest set can become ready any more';
           return -E.INVAL;
