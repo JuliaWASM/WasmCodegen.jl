@@ -422,6 +422,12 @@ export function makeJuliaIOEvents(opts = {}) {
     ready.sort((a, b) => a.at - b.at || a.h - b.h);
     return ready.slice(0, cap).map((r) => r.h);
   }
+  // a timer due that waits for the event loop's turn still: a poll that waits returns after
+  // it, so that the timers due are all in its answer, in their order
+  const startingDue = (interest) => interest.some((h) => {
+    const x = handles.get(h);
+    return x && x.starting && !x.fired && performance.now() >= x.deadline;
+  });
   const anyPending = (interest) => interest.some((h) => { const x = handles.get(h); return x && isPending(x); });
   function writeReady(list, off) {
     const dv = view();
@@ -442,8 +448,8 @@ export function makeJuliaIOEvents(opts = {}) {
       const interest = Array.from({ length: n_interest }, (_, i) => idv.getInt32(4 * i, true));
       checkRange(out_off, 4 * cap, 4);
       const ready = readyOf(interest, cap);
-      if (ready.length || timeout_ns === 0n) return writeReady(ready, out_off);
-      if (timeout_ns === -1n && !anyPending(interest))
+      if (timeout_ns === 0n || (ready.length && !startingDue(interest))) return writeReady(ready, out_off);
+      if (!ready.length && timeout_ns === -1n && !anyPending(interest))
         throw new GuestError(E.INVAL, 'poll: waiting indefinitely, but no handle of the interest set can become ready');
       return suspend(interest, timeout_ns, out_off, cap);
     } catch (e) {
@@ -470,7 +476,7 @@ export function makeJuliaIOEvents(opts = {}) {
         await new Promise((r) => { waker = r; });
         waker = null;
         const ready = readyOf(interest, cap);
-        if (ready.length || timedOut) return writeReady(ready, out_off);
+        if ((ready.length && !startingDue(interest)) || timedOut) return writeReady(ready, out_off);
         if (timeout_ns === -1n && !anyPending(interest)) {
           lastError = 'poll: no handle of the interest set can become ready any more';
           return -E.INVAL;

@@ -45,4 +45,18 @@ check('interest past the end', await poll(END - 4, 2, 0n, 16, 2), -EINVAL);
   hs.forEach((h) => events.imports.close(h));
 }
 
+// a timer armed and a timer of an earlier deadline started after the loop turned, both overdue
+{
+  const dv = new DataView(memory.buffer);
+  const a = events.imports.timer_start(80_000_000n);
+  await new Promise((r) => setImmediate(r));
+  const b = events.imports.timer_start(10_000_000n);
+  dv.setInt32(0, a, true); dv.setInt32(4, b, true);
+  const t0 = performance.now();
+  while (performance.now() - t0 < 100);
+  check('an armed and a starting timer, waited for', await poll(0, 2, -1n, 64, 2), 2);
+  check('an armed and a starting timer, their order', [dv.getInt32(64, true), dv.getInt32(68, true)].join(), [b, a].join());
+  [a, b].forEach((h) => events.imports.close(h));
+}
+
 if (failures.length) console.log(failures.join('\n'));

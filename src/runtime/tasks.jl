@@ -411,6 +411,9 @@ function process_events(timeout_ns::Int64)
             # merged in the order they became ready; for a wait, while none is ready, a wait
             # of a millisecond on the first part, then the polls again)
             part = Int32[]
+            # (the host's loop turns before them: the timers started since its last turn
+            # are armed, and those due are in the polls' answers)
+            timeout_ns == 0 || (ct = current_task(); host_switch(task_id(ct), task_id(ct)))
             while true
                 for i in 1:POLL_MAX:n
                     empty!(part)
