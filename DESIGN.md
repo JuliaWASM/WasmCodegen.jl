@@ -454,6 +454,15 @@ are the module's own (no interoperation with a host's or another module's functi
 image holds none: a `cfunction`'s pointer in a value built at compile time is null or reported,
 as other pointers of the build process are.
 
+**Bounds checks.** An `Expr(:boundscheck)` is a constant of the module, decided when it is
+compiled as native code's is: by the `--check-bounds` of the Julia process that compiles the
+module. With `yes` every check is kept, `@inbounds` or not; with `no` none is; otherwise a
+check is kept but where `@inbounds` reaches it. So the same program can give two modules: one
+built by a process started with `--check-bounds=yes` (as `Pkg.test` starts its own, and CI
+through it) throws the `BoundsError` that one built by a plain `julia` leaves out under
+`@inbounds`. It is not an option of `Config`: the compiled code follows the process as its
+native code does.
+
 ## 8. The runtime
 
 - **Runtime functions** (`src/runtime/`, module `WasmCodegen.Runtime`): Julia code the

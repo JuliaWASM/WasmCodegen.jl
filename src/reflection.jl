@@ -544,15 +544,22 @@ const BY_TYPE_CASES = IdDict{Any,Function}(
         !(T <: Task) && !(T <: Base.UnwrapTaskFailedException) && hasmethod(Base.wait, Tuple{T}; world),
     Runtime.showerror_as => (world, @nospecialize(T)) -> T <: Exception && trim_safe_showerror(T, world))
 
-# whether `showerror(::IOBuffer, ::T)` is trim-safe in `world` (once per type and world)
-const SHOWERROR_TRIM_SAFE = Dict{Tuple{Any,UInt},Bool}()
-trim_safe_showerror(@nospecialize(T), world::UInt) = get!(SHOWERROR_TRIM_SAFE, (T, world)) do
-    try
-        mi = entry_instance(showerror, (IOBuffer, T); world)
-        isempty(trim_check([mi]; world, onlywarn=true))
-    catch
-        false
-    end
+# whether `showerror(::IOBuffer, ::T)` is trim-safe in `world` (once per type, for the world
+# last asked about: the answers of another world are dropped)
+const SHOWERROR_TRIM_SAFE = (world=Ref{UInt}(0), types=IdDict{Any,Bool}())
+function trim_safe_showerror(@nospecialize(T), world::UInt)
+    cache = SHOWERROR_TRIM_SAFE
+    cache.world[] == world || (empty!(cache.types); cache.world[] = world)
+    return get!(cache.types, T) do
+        try
+            mi = entry_instance(showerror, (IOBuffer, T); world)
+            isempty(trim_check([mi]; world, onlywarn=true))
+        catch err
+            # (no unique method, or code the verifier fails on)
+            err isa Union{ErrorException,TrimFailure} || rethrow()
+            false
+        end
+    end::Bool
 end
 
 """

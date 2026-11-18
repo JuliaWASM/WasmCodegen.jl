@@ -2,8 +2,8 @@
 #
 # Integers narrower than 32 bits live in an `i32`, zero-extended (their bits, and zeros
 # above): the arithmetic that can set the bits above masks its result, and operations that
-# depend on the sign sign-extend their operands first. 128-bit integers are not supported
-# yet.
+# depend on the sign sign-extend their operands first. 128-bit integers are two `i64`s
+# (`intrinsics128.jl`).
 
 const II = Core.Intrinsics
 
@@ -107,11 +107,14 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
         return is_ptr_type(typ) ? int_ptr!(fc, typ, r) : r
     end
     if all(isconstant, args) && !(f in NO_FOLD)
-        # fold (as inference would have, had it known)
-        try
-            return const_value(fc, f(map(constant_value, args)...))
+        # fold (as inference would have, had it known); an intrinsic that throws on its
+        # constants is emitted, to throw at run time
+        v = try
+            Some(f(map(constant_value, args)...))
         catch
+            nothing
         end
+        v === nothing || return const_value(fc, something(v))
     end
     if !(f in NO_FOLD) && (any(a -> is128(a.typ), args) || (typ isa Type && is128(typ) && f !== II.bitcast))
         r = emit_intrinsic128!(fc, f, args, typ)
@@ -554,7 +557,8 @@ end
 
 The intrinsic `f` on Float16 values (Wasm has no half-precision arithmetic): computed in
 Float32 and rounded back to Float16, as LLVM legalizes it, which is exact for the basic
-operations (Float32 has more than twice the bits). Conversions round once.
+operations (Float32 has more than twice the bits). Conversions round once, and `muladd`
+rounds its product (it is not fused, as where LLVM legalizes it to a product and a sum).
 """
 function emit_float16!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal}, @nospecialize(typ))
     if f === II.fptrunc
@@ -582,6 +586,8 @@ function emit_float16!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal}
             emit!(fc.b, :i32_or)
         end
         return emit_bitcast!(fc, Float16, pop_val!(fc, UInt16))
+    elseif f === II.muladd_float
+        return emit_float16!(fc, II.add_float, CGVal[emit_float16!(fc, II.mul_float, args[1:2], typ), args[3]], typ)
     end
     xs = Any[a.typ === Float16 ? float16_to_32!(fc, a) : (isconstant(a) && constant_value(a) === Float16 ? const_value(fc, Float32) : a)
              for a in args]
