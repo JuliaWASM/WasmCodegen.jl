@@ -341,6 +341,14 @@ owner once (`Runtime.ptr_owner`, a primitive of the code generator) and copies w
 `array.copy` or a loop over the string's bytes, as IOStream reads and writes through such
 pointers do. An owner whose bytes are not addressable (a memory of references) traps.
 
+The bytes of memory hold addresses, not owners, so a pointer stored in a memory of bytes and
+loaded back cannot be dereferenced. A pointer field of a mutable object (a `Ref{Ptr{T}}`, the
+out-parameter of a C function) holds both leaves: a store of a pointer through a pointer to
+such a field stores its owner too, and a load gives it back (`jl_ptr_store_owner`,
+`jl_ptr_load_owner`, by the owner's type id as the byte helpers). A store of other bytes into
+the field's address (an integer, single bytes, a `memmove`) clears its owner: the field then
+holds an address alone, where natively it is a pointer to whatever is at that address.
+
 ## 6. The image: serializing objects
 
 Constants in the IR (literals, `QuoteNode`s, constant globals) and the values of global

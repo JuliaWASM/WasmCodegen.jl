@@ -160,6 +160,87 @@ function bigunion_store(o::Int)
     GC.@preserve m unsafe_store!(Ptr{UInt8}(pointer_from_objref(m)) + o, 0x5a)
     return Int(m.u) + m.x
 end
+# a pointer stored into or loaded from a pointer field of a mutable object through a pointer
+# keeps its owner
+mutable struct PHold
+    n::Int
+    p::Ptr{UInt8}
+end
+@noinline field_ptr(h::PHold) = Ptr{Ptr{UInt8}}(pointer_from_objref(h)) + 8
+function owner_store(k::Int)
+    a = UInt8[11, 21]; b = UInt8[12, 22]
+    h = PHold(k, pointer(a))
+    GC.@preserve a b h begin
+        unsafe_store!(field_ptr(h), pointer(b) + k)
+        return Int(unsafe_load(h.p)) + (h.p == pointer(b) + k ? 100 : 0)
+    end
+end
+function owner_load(k::Int)
+    a = UInt8[11, 21]
+    h = PHold(k, pointer(a) + k)
+    GC.@preserve a h Int(unsafe_load(unsafe_load(field_ptr(h))))
+end
+# (the out-parameter of a C function)
+@noinline out_ptr!(r::Ref{Ptr{UInt8}}, p::Ptr{UInt8}) = (unsafe_store!(Base.unsafe_convert(Ptr{Ptr{UInt8}}, r), p); nothing)
+function owner_ref(k::Int)
+    a = UInt8[11, 21]; b = UInt8[12, 22]
+    r = Ref(pointer(a))
+    GC.@preserve a b r begin
+        out_ptr!(r, pointer(b) + k)
+        return Int(unsafe_load(r[]))
+    end
+end
+function owner_memory(k::Int)
+    a = UInt8[11, 21]; b = UInt8[12, 22]
+    v = [pointer(a), pointer(a)]
+    GC.@preserve a b v begin
+        unsafe_store!(pointer(v), pointer(b) + k, 2)
+        return Int(unsafe_load(v[2])) + 100Int(unsafe_load(unsafe_load(pointer(v), 2)))
+    end
+end
+# (between two elements of a memory of pointers, a trap: their bytes are not addressable)
+function owner_memory_misaligned(k::Int)
+    a = UInt8[11, 21]
+    v = [pointer(a), pointer(a)]
+    GC.@preserve a v begin
+        k == 0 && return Int(unsafe_load(unsafe_load(pointer(v) + 8)))
+        k == 1 && (unsafe_store!(pointer(v) + 1, pointer(a)); return 1)
+        return Int(unsafe_load(pointer(v) + 1) == C_NULL)
+    end
+end
+# (clearing an element of a memory of references: at the element only)
+function clear_ref_misaligned(k::Int)
+    v = Any[Ref(1), Ref(2)]
+    GC.@preserve v unsafe_store!(Ptr{Ptr{Cvoid}}(pointer(v)) + k, C_NULL)
+    return Int(isassigned(v, 1)) + 2Int(isassigned(v, 2))
+end
+# (a pointer between two elements passed to a call that does not access it)
+import LinearAlgebra
+function blas_empty_misaligned(k::Int)
+    a = [1.0, 2.0]; b = [3.0, 4.0]
+    GC.@preserve a b LinearAlgebra.BLAS.blascopy!(0, pointer(a) + k, 1, pointer(b), 1)
+    return b[1] + b[2]
+end
+# the bytes of an address stored otherwise (as an integer, byte by byte) carry no owner: the
+# field's pointer can be read and compared, not dereferenced
+function owner_bytes(k::Int)
+    a = UInt8[11, 21]; b = UInt8[12, 22]
+    h = PHold(k, pointer(a))
+    GC.@preserve a b h begin
+        unsafe_store!(Ptr{UInt}(field_ptr(h)), UInt(pointer(b)))
+        k == 0 && return Int(h.p == pointer(b))
+        return Int(unsafe_load(h.p))
+    end
+end
+function owner_byte(k::Int)
+    a = UInt8[11, 21]
+    h = PHold(k, pointer(a))
+    GC.@preserve a h begin
+        unsafe_store!(Ptr{UInt8}(field_ptr(h)), unsafe_load(Ptr{UInt8}(field_ptr(h))) + 0x01)
+        k == 0 && return Int(h.p == pointer(a) + 1)
+        return Int(unsafe_load(h.p))
+    end
+end
 # SHA hashes (a smoke test of code reading bytes through pointers)
 import SHA
 sha_hashes(k::Int) = (s = repeat("abc", k); (hash(SHA.sha512(s)), hash(SHA.sha256(s)), hash(SHA.sha1(s))))
@@ -180,6 +261,28 @@ sha_hashes(k::Int) = (s = repeat("abc", k); (hash(SHA.sha512(s)), hash(SHA.sha25
     end
     r = wasm_run(wcompile(ref_manyfields_store, (Int,)), "ref_manyfields_store", 24; rettype=Int)   # p
     @test r isa Tuple && r[1] === :trap
+    for k in (0, 1)
+        @wtest owner_store(k)
+        @wtest owner_load(k)
+        @wtest owner_ref(k)
+        @wtest owner_memory(k)
+    end
+    @wtest owner_memory_misaligned(0)
+    for k in (1, 2)
+        r = wasm_run(wcompile(owner_memory_misaligned, (Int,)), "owner_memory_misaligned", k; rettype=Int)
+        @test r isa Tuple && r[1] === :trap
+    end
+    @wtest clear_ref_misaligned(0)
+    @wtest clear_ref_misaligned(8)
+    r = wasm_run(wcompile(clear_ref_misaligned, (Int,)), "clear_ref_misaligned", 7; rettype=Int)
+    @test r isa Tuple && r[1] === :trap
+    @wtest blas_empty_misaligned(1)
+    for f in (owner_bytes, owner_byte)
+        c = wcompile(f, (Int,))
+        @test wasm_run(c, string(f), 0; rettype=Int) == f(0) == 1
+        r = wasm_run(c, string(f), 1; rettype=Int)
+        @test r isa Tuple && r[1] === :trap
+    end
     @wtest sha_hashes(1)
     @wtest sha_hashes(100)
     @test sizeof(BigBuf) == 112 && sizeof(BigWords) == 328 && sizeof(BigWide) == 208
