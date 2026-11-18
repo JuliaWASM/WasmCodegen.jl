@@ -563,6 +563,9 @@ function timer_ms(timeoutms::UInt64, intervalms::UInt64)
     TIMERS[h] = t
     return t
 end
+# (built field by field: Base's constructor starts a libuv timer)
+fieldnames(Timer) == (:handle, :cond, :isopen, :set, :timeout_ms, :interval_ms) ||
+    error("Base.Timer's fields changed: `new_timer` (runtime/tasks.jl) builds one by their order")
 @eval new_timer(h::Ptr{Cvoid}, tms::UInt64, ims::UInt64) =
     $(Expr(:new, Timer, :h, :(Base.ThreadSynchronizer()), true, false, :tms, :ims))
 
