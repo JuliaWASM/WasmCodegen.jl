@@ -613,13 +613,31 @@ end
 const ATOMICRMW_OPS = Dict("add" => II.add_int, "sub" => II.sub_int, "and" => II.and_int,
                            "or" => II.or_int, "xor" => II.xor_int)
 
+# The LLVM IR of `Threads.Atomic`'s operations, as Julia 1.12 writes it (`base/atomics.jl`),
+# its lines joined by single spaces: the kind of operation => the whole text, with the LLVM
+# type of the value (`T`), of its bits (`I`, for the operations on floats through their
+# bits) and the `atomicrmw` operation (`op`) captured.
+const ATOMIC_LLVMCALLS = [
+    :load => r"^%ptr = bitcast i8\* %0 to (?<T>\w+)\* %rv = load atomic \k<T>, \k<T>\* %ptr acquire, align \d+ ret \k<T> %rv$",
+    :store => r"^%ptr = bitcast i8\* %0 to (?<T>\w+)\* store atomic \k<T> %1, \k<T>\* %ptr release, align \d+ ret void$",
+    :cmpxchg => r"^%ptr = bitcast i8\* %0 to (?<T>\w+)\* %rs = cmpxchg \k<T>\* %ptr, \k<T> %1, \k<T> %2 acq_rel acquire %rv = extractvalue \{ \k<T>, i1 \} %rs, 0 ret \k<T> %rv$",
+    :cmpxchg => r"^%iptr = bitcast i8\* %0 to (?<I>\w+)\* %icmp = bitcast (?<T>\w+) %1 to \k<I> %inew = bitcast \k<T> %2 to \k<I> %irs = cmpxchg \k<I>\* %iptr, \k<I> %icmp, \k<I> %inew acq_rel acquire %irv = extractvalue \{ \k<I>, i1 \} %irs, 0 %rv = bitcast \k<I> %irv to \k<T> ret \k<T> %rv$",
+    :atomicrmw => r"^%ptr = bitcast i8\* %0 to (?<T>\w+)\* %rv = atomicrmw (?<op>\w+) \k<T>\* %ptr, \k<T> %1 acq_rel ret \k<T> %rv$",
+    :atomicrmw => r"^%iptr = bitcast i8\* %0 to (?<I>\w+)\* %ival = bitcast (?<T>\w+) %1 to \k<I> %irv = atomicrmw (?<op>xchg) \k<I>\* %iptr, \k<I> %ival acq_rel %rv = bitcast \k<I> %irv to \k<T> ret \k<T> %rv$",
+]
+
+# the LLVM type of the primitive type `T` in `Threads.Atomic`'s IR
+llvm_type_name(@nospecialize(T)) =
+    T === Float16 ? "half" : T === Float32 ? "float" : T === Float64 ? "double" : string("i", 8sizeof(T))
+
 """
     emit_llvmcall!(fc, args, R) -> CGVal
 
 `llvmcall(ir, R, argtypes, args...)`, of the LLVM IR of `Threads.Atomic`'s operations (Julia
-1.12 writes them so): an atomic load, store, `cmpxchg` or `atomicrmw` through the pointer
-that is the first argument. With one thread, the loads and stores they are. Other IR is
-unsupported.
+1.12 writes them so, `ATOMIC_LLVMCALLS`): an atomic load, store, `cmpxchg` or `atomicrmw`
+through the pointer that is the first argument. With one thread, the loads and stores they
+are. Other IR is unsupported: the IR is not interpreted, it is recognized whole, with the
+types of its arguments and result.
 """
 function emit_llvmcall!(fc::FnCtx, args::Vector{CGVal}, @nospecialize(R))
     ir = isconstant(args[1]) ? constant_value(args[1]) : nothing
@@ -628,15 +646,26 @@ function emit_llvmcall!(fc::FnCtx, args::Vector{CGVal}, @nospecialize(R))
     (ir isa String && !isempty(vals) && is_ptr_type(vals[1].typ)) || unsupported("the intrinsic llvmcall")
     p = vals[1]
     T = eltype(p.typ)
+    text = join(split(ir), ' ')
+    kind = m = nothing
+    for (k, re) in ATOMIC_LLVMCALLS
+        m = match(re, text)
+        m === nothing || (kind = k; break)
+    end
+    # (the value's type is the pointer's, and the arguments and the result are of it)
+    (kind !== nothing && isprimitivetype(T) && m[:T] == llvm_type_name(T) &&
+     length(vals) == (kind === :load ? 1 : kind === :cmpxchg ? 3 : 2) &&
+     all(v -> v.typ === T, vals[2:end]) && R === (kind === :store ? Nothing : T)) ||
+        unsupported("the intrinsic llvmcall (only the LLVM IR of Threads.Atomic's operations is)")
     one_ = const_value(fc, 1)
-    if occursin("load atomic", ir)
+    if kind === :load
         return ptr_load!(fc, p, one_, T)
-    elseif occursin("store atomic", ir)
+    elseif kind === :store
         ptr_store!(fc, p, convert_repr(fc, vals[2], T), one_)
         return ghost(Nothing, nothing)
     end
     old = ptr_load!(fc, p, one_, T)
-    if occursin("cmpxchg", ir)
+    if kind === :cmpxchg
         # (compared by their bits, as `cmpxchg` compares)
         I = T <: AbstractFloat ? Base.uinttype(T) : T
         bits(v) = I === T ? v : emit_intrinsic!(fc, II.bitcast, Any[const_value(fc, I), v], I)
@@ -645,9 +674,7 @@ function emit_llvmcall!(fc::FnCtx, args::Vector{CGVal}, @nospecialize(R))
         if!(fc.b); ptr_store!(fc, p, convert_repr(fc, vals[3], T), one_); end!(fc.b)
         return old
     end
-    m = match(r"atomicrmw (\w+)", ir)
-    m === nothing && unsupported("the intrinsic llvmcall")
-    op, v = m[1], convert_repr(fc, vals[2], T)
+    op, v = m[:op], convert_repr(fc, vals[2], T)
     new = if op == "xchg"
         v
     elseif haskey(ATOMICRMW_OPS, op)

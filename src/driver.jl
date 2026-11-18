@@ -279,6 +279,8 @@ function finish_module!(cgm::CGModule)
     finish_cfunctions!(cgm)
     finish_image!(cgm)
     finish_type_maps!(cgm)
+    # (the tables by type id are of the types the module has from here on)
+    ntypes = length(cgm.types.typelist)
     finish_typeof!(cgm)
     t = time_ns()
     finish_apply_type!(cgm)
@@ -296,6 +298,9 @@ function finish_module!(cgm::CGModule)
     finish_types!(cgm)
     finish_subtype!(cgm)
     finish_host!(cgm)
+    length(cgm.types.typelist) == ntypes ||
+        error("WasmCodegen: ", length(cgm.types.typelist) - ntypes, " types added after the tables over types (",
+              join(cgm.types.typelist[ntypes+1:end], ", "), ")")
 end
 
 """
