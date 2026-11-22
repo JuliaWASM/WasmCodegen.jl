@@ -1,4 +1,4 @@
-// The embedder's handles of js/julia_io.mjs (`events.external`, `ready`, `polling`), as a host library uses them,
+// The embedder's handles of js/julia_io.mjs (`events.external`, `ready`), as a host library uses them,
 // without a Julia module: `poll` is called from a tiny Wasm module that only forwards to the import (a suspension
 // needs a Wasm frame under WebAssembly.promising). Prints "what: true|false" per check (test/tasks.jl).
 import { makeJuliaIOEvents } from '../js/julia_io.mjs';
@@ -9,9 +9,9 @@ const dv = new DataView(mem.buffer);
 const out = [];
 const check = (what, ok) => out.push(`${what}: ${!!ok}`);
 
-let closed = 0, cancelled = 0;
+let closed = 0;
 const a = events.external({ onClose: () => { closed++; } });
-const b = events.external({ onCancel: () => { cancelled++; } });
+const b = events.external();
 check('a pending external handle is not ready', events.handleState(a).ready === false && events.handleState(a).kind === 'external');
 check('ready makes it ready (once)', events.ready(a) === true && events.handleState(a).ready && events.ready(a) === true);
 function pollModule() {
@@ -43,19 +43,11 @@ setTimeout(() => events.ready(b), 20);
 const t0 = performance.now();
 const pending = pollOf([b], -1);
 await new Promise((r) => setTimeout(r, 5));
-const wasPolling = events.polling();
 const got = await pending;
-check('an indefinite poll waits until ready() (polling() meanwhile)', wasPolling && !events.polling() && got[0] === b && performance.now() - t0 >= 15);
-const c = events.external({ onCancel: () => { cancelled++; } });
-events.imports.cancel(c);
-check('cancel: ready, cancelled, onCancel', events.handleState(c).ready && events.handleState(c).cancelled && cancelled === 1);
+check('an indefinite poll of a pending one waits until ready()', got[0] === b && performance.now() - t0 >= 15);
 events.imports.close(a);
 check('close: onClose, and ready() of a closed handle is false', closed === 1 && events.ready(a) === false);
-// a poll of pending externals only does not fail (they can become ready)
-const d = events.external({ onClose: () => { closed++; } });
-setTimeout(() => events.ready(d), 5);
-check('a pending external handle can become ready (no EINVAL)', (await pollOf([d], -1))[0] === d);
-const e = events.external({ onClose: () => { closed++; } });
+events.external({ onClose: () => { closed++; } });
 events.stop();
-check('stop: the open external handles closed', closed === 3);
+check('stop: the open external handles closed', closed === 2);
 process.stdout.write(out.join('\n') + '\n');

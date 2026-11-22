@@ -33,23 +33,6 @@ let T = WasmCodegen.Runtime.Tasks
     # the runtime's host waits as tasks' waits; `sleep` on a `Timer`, as Base's
     @eval WasmCodegen.Runtime.Host await_handle(h::Int32) = $(T.await)(h)
     @eval WasmCodegen.Runtime.Host sleep_ms(ms::UInt64) = $(T.sleep_ms)(ms)
-    # (a constant of the compilation, for packages: the module has tasks)
-    @eval WasmCodegen.Runtime.Tasks enabled() = true
-    # `asyncmap` and `asyncmap!`: typed (Base's collect their results from `Ref{Any}`s, or from
-    # a `Vector{Any}` and an `AsyncCollector` of untyped fields; with a `batch_size`, from
-    # `Vector{Any}` batches). Which function runs the workers depends on Base: 1.12's
-    # `async_usemap` (asyncmap.jl:80), which `asyncmap` calls, and that of a `BitArray`; 1.13
-    # has none, its `asyncmap` (asyncmap.jl:76) itself runs the `AsyncCollector`. `asyncmap!`
-    # is that of a string, on both
-    @static if VERSION >= v"1.13-"
-        @eval Base asyncmap(f, c...; ntasks=0, batch_size=nothing) =
-            $(T.asyncmap_typed)(f, verify_ntasks(enumerate(zip(c...)), ntasks), verify_batch_size(batch_size), c...)
-    else
-        @eval Base async_usemap(f, c...; ntasks=0, batch_size=nothing) =
-            $(T.asyncmap_typed)(f, verify_ntasks(c[1], ntasks), verify_batch_size(batch_size), c...)
-    end
-    @eval Base asyncmap!(f, r, c1, c...; ntasks=0, batch_size=nothing) =
-        $(T.asyncmap_typed!)(f, r, verify_ntasks(enumerate(zip(c1, c...)), ntasks), verify_batch_size(batch_size), c1, c...)
 end
 
 # `Threads.@threads`: Base's `threading_run`, specialized on the loop's body (`threadsfor_fun`), so

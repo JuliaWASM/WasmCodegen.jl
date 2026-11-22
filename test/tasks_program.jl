@@ -593,103 +593,6 @@ function monitor_own()
     println(Core.stdout, "own error monitored ", istaskfailed(t))
 end
 
-struct MapError <: Exception
-    i::Int
-end
-
-# asyncmap (without batch_size): the results in order, in `map`'s shape, of the inferred type;
-# a worker's failure, captured
-function asyncmaps()
-    r = asyncmap(i -> (sleep(0.001 * (6 - i)); i * i), 1:5)
-    println(Core.stdout, "asyncmap ", r, " ", eltype(r))
-    r2 = asyncmap((a, b) -> string(a, b), [1, 2, 3], ["x", "y", "z"]; ntasks=2)
-    println(Core.stdout, "asyncmap two ", r2)
-    m = asyncmap(x -> x + 0.5, [1 2; 3 4])
-    println(Core.stdout, "asyncmap shape ", size(m), " ", m[2, 1])
-    a3 = asyncmap(x -> x * 2, reshape(1:8, 2, 2, 2))
-    println(Core.stdout, "asyncmap 3d ", size(a3), " ", a3[2, 1, 2], " ", typeof(a3))
-    tp = asyncmap(x -> x + 0.5, (1, 2, 3))
-    println(Core.stdout, "asyncmap tuple ", tp, " ", typeof(tp))
-    try
-        asyncmap(i -> i == 3 ? throw(MapError(i)) : i, 1:4)
-        println(Core.stdout, "asyncmap no error")
-    catch e
-        x = e isa CapturedException ? (e::CapturedException).ex : nothing
-        println(Core.stdout, "asyncmap ", x isa MapError ? string("CapturedException of MapError ", x.i) : "other error")
-    end
-end
-
-# asyncmap's results' type and shape (natively, they differ between 1.12 and 1.13): of inputs
-# empty by their types (`()`, element type `Union{}`: an element type `Union{}` on 1.12, `Any`
-# on 1.13), of several tuples (a tuple on 1.12, a vector on 1.13); of empty arrays, the shape
-# (natively of element type `Any`, here the inferred one). (An empty `Vector{Any}` is not
-# printed: its `show` is dynamic; the module prints types without their aliases, and
-# `Union{}` as a parameter not.)
-typeinfo(r::Tuple) = r === () ? "Tuple{}" : string(typeof(r))
-typeinfo(r::AbstractArray) = string(r isa BitArray ? "BitArray" : "Array", " of ", ndims(r), " ",
-                                    eltype(r) === Union{} ? "Union{}" : string(eltype(r)))
-summary_line(label, r) = println(Core.stdout, "asyncmap ", label, " ", typeinfo(r), " ", size(r))
-summary_line(label, r::Tuple) = println(Core.stdout, "asyncmap ", label, " ", r, " ", typeinfo(r))
-empty_line(label, r) = println(Core.stdout, "asyncmap ", label, " ", size(r), " ", isempty(r))
-function asyncmap_shapes()
-    summary_line("()", asyncmap(identity, ()))
-    empty_line("Int[]", asyncmap(x -> x + 1, Int[]))
-    summary_line("Union{}[]", asyncmap(identity, Union{}[]))
-    empty_line("0x3", asyncmap(x -> x + 0.5, zeros(Int, 0, 3)))
-    empty_line("1:0", asyncmap(x -> x + 1, 1:0))
-    empty_line("vector and empty", asyncmap(+, [1, 2], Int[]))
-    summary_line("tuple and ()", asyncmap(+, (1, 2), ()))
-    summary_line("() and vector", asyncmap(+, (), [1]))
-    tt = asyncmap(+, (1, 2), (3, 4))
-    println(Core.stdout, "asyncmap tuples ", tt, " ", typeinfo(tt))
-    tu = asyncmap(+, (1, 2, 3), (10, 20); ntasks=1)
-    println(Core.stdout, "asyncmap uneven tuples ", tu, " ", typeinfo(tu))
-    # a string: Base's `asyncmap` of a string, over `asyncmap!`
-    println(Core.stdout, "asyncmap string ", asyncmap(uppercase, "abc"), " ", repr(asyncmap(uppercase, "")),
-            " ", asyncmap(c -> c == 'é' ? 'e' : c, "héllo"; ntasks=2))
-    r = zeros(Int, 3)
-    a = asyncmap!(x -> x * 2, r, [1, 2, 3])
-    println(Core.stdout, "asyncmap! ", r, " ", a === r)
-    # a `BitArray`: 1.12's `asyncmap` of one, a `BitArray` of `Bool` results
-    b = asyncmap(!, BitVector([true, false, true]))
-    println(Core.stdout, "asyncmap bits ", b, " ", typeinfo(b))
-    bi = asyncmap(x -> Int(x), BitVector([true, false]))
-    println(Core.stdout, "asyncmap bits to Int ", bi, " ", typeinfo(bi))
-    empty_line("no bits", asyncmap(!, BitVector()))
-end
-
-# asyncmap with batch_size: `f` of a vector of argument tuples, in batches of up to batch_size
-function asyncmap_batches()
-    sizes = Int[]
-    r = asyncmap(b -> (push!(sizes, length(b)); map(x -> x[1] * 2, b)), 1:5; ntasks=1, batch_size=2)
-    println(Core.stdout, "asyncmap batches ", r, " ", typeinfo(r), " of ", sizes)
-    r2 = asyncmap(b -> map(x -> x[1] + x[2], b), [1, 2, 3], [4, 5, 6]; ntasks=2, batch_size=2)
-    println(Core.stdout, "asyncmap batches two ", r2)
-    tb = asyncmap(b -> map(x -> x[1] * 2, b), (1, 2, 3); batch_size=2)
-    println(Core.stdout, "asyncmap batches tuple ", tb, " ", typeinfo(tb))
-    mb = asyncmap(b -> map(x -> x[1] * 0.5, b), [1 2; 3 4]; batch_size=3)
-    println(Core.stdout, "asyncmap batches matrix ", size(mb), " ", vec(mb), " ", typeinfo(mb))
-    empty_line("batches of none", asyncmap(b -> map(x -> x[1] * 2, b), Int[]; batch_size=2))
-    try
-        asyncmap(b -> map(x -> x[1] == 3 ? throw(MapError(x[1])) : x[1], b), 1:4; batch_size=2)
-        println(Core.stdout, "asyncmap batches no error")
-    catch e
-        x = e isa CapturedException ? (e::CapturedException).ex : nothing
-        println(Core.stdout, "asyncmap batches ", x isa MapError ? string("CapturedException of MapError ", x.i) : "other error")
-    end
-    try
-        asyncmap(b -> b, 1:3; batch_size=0)
-    catch e
-        m = e isa ArgumentError ? (e::ArgumentError).msg : "other error"
-        println(Core.stdout, "asyncmap batches ", m isa String ? m : "")
-    end
-    # (1.12's `asyncmap!` with a batch_size calls `f` of each argument tuple, and fails)
-    @static if VERSION >= v"1.13-"
-        s = asyncmap(b -> map(x -> uppercase(x[1]), b), "abcde"; batch_size=2)
-        println(Core.stdout, "asyncmap batches string ", s)
-    end
-end
-
 function main()::Int32
     root_state()
     root_ref()
@@ -726,9 +629,6 @@ function main()::Int32
     many_timers_idle()
     sync_typed_channel()
     sync_own_wait()
-    asyncmaps()
-    asyncmap_shapes()
-    asyncmap_batches()
     threads_loops()
     println(Core.stdout, "done")
     return Int32(0)
@@ -904,25 +804,6 @@ function external_wait(h::Int32)::Int64
     end
     wait(t)
     return n[]
-end
-
-"Whether the module has tasks (`Runtime.Tasks.enabled()`, a constant of the compilation)."
-tasks_enabled()::Int32 = WasmCodegen.Runtime.Tasks.enabled() ? Int32(1) : Int32(0)
-
-# asyncmap of empty arrays: Base's shape, of the inferred element type (natively `Any`, which
-# `main` does not print; a `BitArray` of `Bool` results, as for a non-empty one); `()` exactly.
-# A bit for each check (none printed: `main`'s output is compared with native's)
-function asyncmap_empty_eltypes()::Int32
-    a = asyncmap(x -> x + 1, Int[])
-    m = asyncmap(x -> x + 0.5, zeros(Int, 0, 3))
-    r = asyncmap(x -> x + 1, 1:0)
-    z = asyncmap(+, [1, 2], Int[])
-    b = asyncmap(!, BitVector())
-    bb = asyncmap(b -> map(x -> x[1] * 2, b), Int[]; batch_size=2)
-    t = asyncmap(identity, ())
-    checks = (a isa Vector{Int}, m isa Matrix{Float64}, size(m) == (0, 3), r isa Vector{Int},
-              z isa Vector{Int}, b isa BitVector, bb isa Vector{Int}, t === (), isempty(a) && isempty(z))
-    return Int32(sum(i -> checks[i] << (i - 1), 1:length(checks)))
 end
 
 # returns while a task waits forever: the host keeps it parked (the next root call may run)
