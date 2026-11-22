@@ -711,7 +711,7 @@ function set_field_dynamic!(fc::FnCtx, x::CGVal, i::CGVal, v::CGVal)
     for_field_at!(fc, idx, fieldcount(T)) do k
         if isconst(T, k)
             throw_error!(fc, Runtime.throw_error_message,
-                         const_value(fc, string("setfield!: const field .", fieldname(T, k), " of type ", T.name.name, " cannot be changed")))
+                         () -> const_value(fc, string("setfield!: const field .", fieldname(T, k), " of type ", T.name.name, " cannot be changed")))
             return
         end
         FT = fieldtype(T, k)
