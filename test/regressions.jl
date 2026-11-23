@@ -118,6 +118,19 @@ rg_vt_typevar(i::Int) = (x = RG_TV_VALUES[i]; (x isa RG_TV_A, x isa RG_TV_B))
 # one type; other shapes, a variable in a parameter, the closed world's error)
 rg_vt_typevar_unknown(n::Int) = (x = rg_id(Any[tuple(collect(1:n)...)])[1]; (x isa RG_TV_A) + 2 * (x isa RG_TV_B))
 rg_vt_typevar_mixed(n::Int) = (x = rg_id(Any[tuple(Any[1, 2.5, "s"][1:n]...)])[1]; (x isa RG_TV_A) + 2 * (x isa RG_TV_B))
+# (a `Vararg` whose length is a variable of no other part, `NTuple`'s: of any length; and a
+# vector literal of an abstract element type, `getindex(::Type{T}, vals...)`, which tests
+# `vals isa NTuple`)
+const RG_TV_NT = Tuple{T,Vararg{T,N}} where {N,T}
+const RG_TV_NTI = NTuple{N,Int} where N
+rg_vt_ntuple(n::Int) = (x = rg_id(Any[tuple(Any[1, 2, 2.5, "s"][1:n]...)])[1];
+                        (x isa NTuple) + 2 * (x isa RG_TV_NTI) + 4 * (x isa RG_TV_NT))
+abstract type RGShape end
+struct RGCircle <: RGShape; r::Float64; end
+struct RGSquare <: RGShape; s::Float64; end
+const RG_SHAPES = RGShape[RGCircle(1.0), RGSquare(2.0)]
+rg_vect_abstract(i::Int, j::Int) = (v = RGShape[RG_SHAPES[i], RG_SHAPES[j]];
+                                    (length(v), v[1] === RG_SHAPES[i], v[2] === RG_SHAPES[j]))
 const RG_TV_NESTED = Tuple{Vector{T}, Vararg{Any}} where T
 struct RGTvItem; n::Int; end
 rg_vt_typevar_nested(n::Int) = (x = rg_id(Any[tuple(Any[[n], RGTvItem(n)][1:n]...)])[1]; x isa RG_TV_NESTED)
@@ -453,6 +466,10 @@ end
     for n in 0:3
         @wtest rg_vt_typevar_mixed(n)
     end
+    for n in 0:4
+        @wtest rg_vt_ntuple(n)
+    end
+    @wtest rg_vect_abstract(1, 2); @wtest rg_vect_abstract(2, 2)
     @test rg_vt_typevar_nested(2)
     let r = wasm_run(wcompile(rg_vt_typevar_nested, (Int,)), "rg_vt_typevar_nested", 2; rettype=Bool)
         @test r isa Tuple && r[1] === :trap
