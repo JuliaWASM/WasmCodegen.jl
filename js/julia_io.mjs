@@ -115,6 +115,7 @@ function describe(e) {
   // (a value without a string, as an object of no prototype, has no message; neither has a
   // cause of one, which leaves the message of the error it is the cause of)
   const text = (f) => { try { return String(f()); } catch { return undefined; } };
+  if (!text(() => e instanceof Error)) return 'an exception without a message'; // (a revoked proxy)
   if (!(e instanceof Error)) return text(() => e) ?? 'an exception without a message';
   let m = text(() => e.message) ?? 'an exception without a message';
   const c = text(() => {
