@@ -113,12 +113,16 @@ export class GuestError extends Error {
 
 function describe(e) {
   // (a value without a string, as an object of no prototype, has no message)
-  if (!(e instanceof Error)) { try { return String(e); } catch { return 'an exception that is not an Error'; } }
-  let m = e.message;
-  const c = e.cause;
-  if (c) m += ': ' + (c.code ? c.code + ' ' : '') + (c.message || String(c));
-  else if (e.code && !m.includes(e.code)) m = e.code + ' ' + m;
-  return m;
+  try {
+    if (!(e instanceof Error)) return String(e);
+    let m = e.message;
+    const c = e.cause;
+    if (c) m += ': ' + (c.code ? c.code + ' ' : '') + (c.message || String(c));
+    else if (e.code && !m.includes(e.code)) m = e.code + ' ' + m;
+    return m;
+  } catch {
+    return 'an exception without a message';
+  }
 }
 
 export function errnoOf(e) {
@@ -407,8 +411,7 @@ export function makeJuliaIOEvents(opts = {}) {
     if (x.kind !== 'external' || typeof x.onClose !== 'function') return;
     const failed = (e) => { lastError = describe(e); };
     try {
-      const r = x.onClose(x.id);
-      if (r && typeof r.then === 'function') r.then(undefined, failed);
+      Promise.resolve(x.onClose(x.id)).catch(failed);
     } catch (e) { failed(e); }
   }
 

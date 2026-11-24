@@ -76,7 +76,8 @@ check('ready with a message that closes the handle is false',
       events.ready(g, { toString() { events.imports.close(g); return 'gone'; } }) === false && events.handleState(g) === null);
 // an onClose that throws (a value without a string, even), or rejects, does not keep stop() from closing the others
 events.external({ onClose: () => { throw Object.create(null); } });
-events.external({ onClose: async () => { throw new Error('rejected'); } });
+events.external({ onClose: async () => { throw new Error('rejected', { cause: Object.create(null) }); } });
+events.external({ onClose: () => ({ then(resolve) { queueMicrotask(() => resolve()); } }) });
 const e = events.external({ onClose: () => { closed++; } });
 let stopThrew = false;
 try { events.stop(); } catch (err) { stopThrew = true; }
