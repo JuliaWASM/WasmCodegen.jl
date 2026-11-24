@@ -78,12 +78,20 @@ check('ready with a message that closes the handle is false',
 events.external({ onClose: () => { throw Object.create(null); } });
 events.external({ onClose: async () => { throw new Error('rejected', { cause: Object.create(null) }); } });
 events.external({ onClose: () => ({ then(resolve) { queueMicrotask(() => resolve()); } }) });
+events.external({ onClose: () => Object.assign(Promise.reject(Error('cleanup')), { catch: undefined }) });
 const e = events.external({ onClose: () => { closed++; } });
 let stopThrew = false;
 try { events.stop(); } catch (err) { stopThrew = true; }
 await turns(5);
 check('stop: the open external handles closed, whatever their onClose throws', closed === 2 && !stopThrew);
 check('... and released: ready() is false, none open', events.ready(e) === false && events.stats().open === 0);
+// the message of an onClose's error is kept, whatever its cause
+{
+  const { events, errmsg } = setup();
+  const h = events.external({ onClose: () => { throw new Error('flush failed', { cause: Object.create(null) }); } });
+  events.imports.close(h);
+  check('an onClose error with a cause without a string keeps its message', errmsg(-1) === 'flush failed');
+}
 // stop() in the turn of the ready() that woke a suspended poll: the poll does not resume
 {
   const { events, pollOf } = setup();

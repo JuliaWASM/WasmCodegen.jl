@@ -119,7 +119,7 @@ end
 @testset "julia_io's external handles (js/julia_io.mjs)" begin
     out = read(`$(node_cmd()) --disable-warning=ExperimentalWarning $(jspi_flags()) $(joinpath(@__DIR__, "julia_io_external.mjs"))`, String)
     ls = split(chomp(out), '\n')
-    @test length(ls) == 13
+    @test length(ls) == 14
     for l in ls
         @test endswith(l, ": true")
     end

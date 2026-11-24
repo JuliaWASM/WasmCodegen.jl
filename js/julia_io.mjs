@@ -112,17 +112,18 @@ export class GuestError extends Error {
 }
 
 function describe(e) {
-  // (a value without a string, as an object of no prototype, has no message)
-  try {
-    if (!(e instanceof Error)) return String(e);
-    let m = e.message;
+  // (a value without a string, as an object of no prototype, has no message; neither has a
+  // cause of one, which leaves the message of the error it is the cause of)
+  const text = (f) => { try { return String(f()); } catch { return undefined; } };
+  if (!(e instanceof Error)) return text(() => e) ?? 'an exception without a message';
+  let m = text(() => e.message) ?? 'an exception without a message';
+  const c = text(() => {
     const c = e.cause;
-    if (c) m += ': ' + (c.code ? c.code + ' ' : '') + (c.message || String(c));
-    else if (e.code && !m.includes(e.code)) m = e.code + ' ' + m;
-    return m;
-  } catch {
-    return 'an exception without a message';
-  }
+    return c ? ': ' + (c.code ? c.code + ' ' : '') + (c.message || String(c)) : '';
+  }) ?? '';
+  if (c) return m + c;
+  const code = text(() => e.code || '');
+  return code && !m.includes(code) ? code + ' ' + m : m;
 }
 
 export function errnoOf(e) {
@@ -410,9 +411,8 @@ export function makeJuliaIOEvents(opts = {}) {
   function closed(x) {
     if (x.kind !== 'external' || typeof x.onClose !== 'function') return;
     const failed = (e) => { lastError = describe(e); };
-    try {
-      Promise.resolve(x.onClose(x.id)).catch(failed);
-    } catch (e) { failed(e); }
+    // (awaited, for a thenable of any kind)
+    (async () => { try { await x.onClose(x.id); } catch (e) { failed(e); } })();
   }
 
   // ---- timers ----
