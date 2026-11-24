@@ -751,10 +751,13 @@ function get_field_dynamic(fc::FnCtx, x::CGVal, i::CGVal, @nospecialize(typ))
         return res
     end
     l = layout(fc, T)
+    # (a SimpleVector's elements are no fields of it)
+    T === Core.SimpleVector && i.typ === Int &&
+        return throw_error!(fc, Runtime.throw_bounds_error, () -> convert_repr(fc, x, Any), i)
     if l.kind === Boxed && l.elements !== nothing
         i.typ === Symbol || return tuple_array_get!(fc, x, i)
-        # (no field of a tuple has a name)
-        isconcretetype(T) && T <: Tuple &&
+        # (no field of a tuple, or of a SimpleVector, has a name)
+        isconcretetype(T) &&
             return throw_error!(fc, Runtime.throw_field_error, () -> convert_repr(fc, const_value(fc, T), Any), i)
     end
     # (an index of another type, natively a TypeError or by the value's type, is not)
