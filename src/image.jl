@@ -402,8 +402,10 @@ function note_reach!(img::Image, @nospecialize(x))
     return
 end
 
+const CYCLE_HINT = "; Config(shell_first_mutables = true) serializes cycles through mutable objects"
+
 function new_object_global!(img::Image, @nospecialize(x))
-    x in img.inprogress && unsupported("serializing a cycle of objects through ", typeof(x))
+    x in img.inprogress && unsupported("serializing a cycle of objects through ", typeof(x), CYCLE_HINT)
     # types are objects even where their type is a singleton (`Union{}`)
     x isa Type && return type_object_global!(img, x)
     ts = types(img)
@@ -501,7 +503,7 @@ function bytes_object_global!(img::Image, @nospecialize(x))
 end
 
 # the object of a Memory whose array is the global `arr`
-function memory_object_global!(img::Image, mem, arr::Global)
+function memory_object_global!(img::Image, @nospecialize(mem), arr::Global)
     ts = types(img)
     T = typeof(mem)
     img.arrays[mem] = arr
@@ -559,7 +561,7 @@ function struct_global!(img::Image, @nospecialize(x), l::Layout; register::Bool=
     g = add_global!(img.cgm.mod, global_name(img, x), RefType(l.wtype, false), false, init)
     register && (img.globals[x] = g)
     if !isempty(back)
-        ismutabletype(T) || unsupported("a cycle of objects through the immutable ", T)
+        ismutabletype(T) || unsupported("a cycle of objects through the immutable ", T, CYCLE_HINT)
         for (wfield, v, FT, reset) in back
             push!(img.patches, (g, :struct, l.wtype, wfield, v, FT, img.owner, reset))
         end
@@ -568,7 +570,7 @@ function struct_global!(img::Image, @nospecialize(x), l::Layout; register::Bool=
 end
 
 # (`tuple_reset`: the array of a tuple, see `tuple_array_global!`)
-function memory_global!(img::Image, mem; tuple_reset::Union{Nothing,Bool}=nothing)
+function memory_global!(img::Image, @nospecialize(mem); tuple_reset::Union{Nothing,Bool}=nothing)
     T = typeof(mem)
     E = memory_eltype(T)
     ml = memory_layout(types(img), E)
@@ -965,7 +967,15 @@ function prepare_image_patches!(cgm::CGModule)
         owner = length(p) >= 7 ? p[7] : nothing
         reset = length(p) >= 8 && p[8]::Bool
         leaves = try
-            with_image_owner(() -> const_leaves(img, v, FT; reset_pointers=reset), img, owner)
+            # (as `with_image_owner`, without its closure: one would have a type of its own, natively
+            # compiled, for each type of `v` and `FT`)
+            prev = img.owner
+            img.owner = owner
+            try
+                const_leaves(img, v, FT; reset_pointers=reset)
+            finally
+                img.owner = prev
+            end
         catch err
             err isa Unsupported || rethrow()
             deferred_value_failed!(cgm, err, owner, FT)

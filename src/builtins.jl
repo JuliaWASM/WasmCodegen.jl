@@ -1416,7 +1416,9 @@ end
 The parts of a tuple type with type variables of the common shape, whose `isa` the types of a
 tuple's elements decide (`diagonal_vars_isa!`): `Tuple{P1, …, Pk[, Vararg{Pv}]} where V1, …, Vm`,
 each parameter a variable or of none of them, each variable's bounds types of none (no variable,
-of these or free) and ordered (`lb <: ub`), a `Vararg` of no variable length. Else `nothing`.
+of these or free) and ordered (`lb <: ub`), a `Vararg` of no length or of a length that is an
+unbounded variable of no other part (`NTuple`'s `N`: any length, and not one of `vars`). Else
+`nothing`.
 """
 function bound_tuple_shape(@nospecialize(T))
     vars = TypeVar[]
@@ -1425,15 +1427,21 @@ function bound_tuple_shape(@nospecialize(T))
         push!(vars, W.var); W = W.body
     end
     (W isa DataType && W.name === Tuple.name) || return nothing
-    any(v -> any(w -> Base.has_typevar(v.lb, w) || Base.has_typevar(v.ub, w), vars), vars) && return nothing
-    all(v -> v.lb isa Type && v.ub isa Type && v.lb <: v.ub, vars) || return nothing
     ps = collect(Any, W.parameters)
     va = !isempty(ps) && ps[end] isa Core.TypeofVararg
     if va
         V = ps[end]
-        isdefined(V, :N) && return nothing
         ps[end] = isdefined(V, :T) ? V.T : Any
+        if isdefined(V, :N)
+            N = V.N
+            (N isa TypeVar && N.lb === Union{} && N.ub === Any && any(v -> v === N, vars)) || return nothing
+            filter!(v -> v !== N, vars)
+            any(P -> Base.has_typevar(P, N), ps) && return nothing
+            any(v -> Base.has_typevar(v.lb, N) || Base.has_typevar(v.ub, N), vars) && return nothing
+        end
     end
+    any(v -> any(w -> Base.has_typevar(v.lb, w) || Base.has_typevar(v.ub, w), vars), vars) && return nothing
+    all(v -> v.lb isa Type && v.ub isa Type && v.lb <: v.ub, vars) || return nothing
     for P in ps
         P isa TypeVar && any(v -> v === P, vars) && continue
         any(v -> Base.has_typevar(P, v), vars) && return nothing
