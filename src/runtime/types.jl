@@ -740,3 +740,17 @@ for n in 0:MAX_APPLY_PARAMS
         return apply_type_check_body(W, $ps)
     end
 end
+
+# the number of fields of every value of the tuple type `T`; nothing where it is not one
+# number (`fieldcount` has none for a `Vararg` of a known length that a UnionAll keeps,
+# `Tuple{Vararg{T,2}} where T`). For the patch of `convert` to a tuple type (trim/wasm-base.jl).
+Base.@assume_effects :foldable function tuple_fixed_length(@nospecialize(T::Type))
+    U = Base.unwrap_unionall(T)
+    U isa DataType || return nothing
+    p = U.parameters
+    n = length(p)
+    n == 0 && return 0
+    va = p[n]
+    Base.isvarargtype(va) || return n
+    return isdefined(va, :N) && va.N isa Int ? n - 1 + va.N::Int : nothing
+end

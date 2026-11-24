@@ -61,8 +61,15 @@ cvt_mwe() = (t = convert(NTuple{3,Bool}, (V...,)); t[1] + 2 * t[2] + 4 * t[3])
 cvt_bool3(n::Int) = try bits(convert(NTuple{3,Bool}, (BS[1:n]...,))) catch e; e isa MethodError ? -1 : -2 end
 cvt_bool13(n::Int) = try bits(convert(NTuple{13,Bool}, (BS[1:n]...,))) catch e; e isa MethodError ? -1 : -2 end
 # (the MethodError's function and arguments, as Base's `_tuple_error` makes them)
-cvt_error(n::Int) = try convert(NTuple{3,Bool}, (BS[1:n]...,)); 0
-                    catch e; e isa MethodError && e.f === convert && (a = e.args; a isa Tuple{Any,Tuple} && a[1] === NTuple{3,Bool} && nfields(a[2]) == n && a[2][n] === BS[n]) ? 1 : 2 end
+function cvt_error(n::Int)
+    t = (BS[1:n]...,)
+    try
+        convert(NTuple{3,Bool}, t)
+        return 0
+    catch e
+        return e isa MethodError && e.f === convert && (a = e.args; a isa Tuple{Any,Tuple} && a[1] === NTuple{3,Bool} && a[2] === t) ? 1 : 2
+    end
+end
 cvt_float(n::Int) = try (t = convert(NTuple{3,Float64}, (IS[1:n]...,)); t[1] + t[2] / 4 + t[3] / 16)
                     catch e; e isa MethodError ? -1.0 : -2.0 end
 cvt_mixed(n::Int) = try (t = convert(Tuple{Float64,Int,Float64}, (IS[1:n]...,)); t[1] + t[2] / 4 + t[3] / 16)
@@ -125,7 +132,7 @@ vec_selectdim(n::Int, d::Int) = (y = collect(1.0:n); selectdim(y, d, 1) .*= 2; s
         @test cvt_mwe() == 5 && cvt_bool3(3) == 5 && cvt_bool3(2) == -1 && cvt_float(3) == 1.6875 &&
               cvt_tint(1, 2) === 21.5 && cvt_tint(3, 2) === -3.0 && cvt_ntint(2, 2) === 32 && cvt_error(3) == 0 &&
               cvt_error(2) == 1 && cvt_tvar(3) === 1.6875 && cvt_tvar(2) === -1.0
-        for n in 2:4
+        for n in (0, 2, 3, 4)
             @wtest cvt_error(n)
         end
         @wtest cvt_mwe()
