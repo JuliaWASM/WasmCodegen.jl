@@ -482,8 +482,13 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         end
         ismutabletype(T) || return immutable()
         bad_field_index(idx.typ) && return field_index_error!(fc, :setfield!, idx)
-        # (an index or a name known not to be a field's: its error at run time)
-        k === nothing && return set_field_dynamic!(fc, x, idx, v, atomic)
+        isconstant(idx) || return set_field_dynamic!(fc, x, idx, v, atomic)
+        if k === nothing
+            # (an index or a name known not to be a field's: its error, at run time)
+            c = constant_value(idx)
+            c isa Symbol && return no_field!(fc, T, c)
+            return throw_error!(fc, Runtime.throw_bounds_error, () -> convert_repr(fc, x, Any), idx)
+        end
         return checked_set_field!(fc, x, k, v, atomic)
     elseif f === Core.swapfield! || f === Core.modifyfield! || f === Core.replacefield! ||
            (isdefined(Core, :setfieldonce!) && f === Core.setfieldonce!)
@@ -746,8 +751,12 @@ function get_field_dynamic(fc::FnCtx, x::CGVal, i::CGVal, @nospecialize(typ))
         return res
     end
     l = layout(fc, T)
-    l.kind === Boxed && l.elements !== nothing && i.typ !== Symbol &&
-        return tuple_array_get!(fc, x, i)
+    if l.kind === Boxed && l.elements !== nothing
+        i.typ === Symbol || return tuple_array_get!(fc, x, i)
+        # (no field of a tuple has a name)
+        isconcretetype(T) &&
+            return throw_error!(fc, Runtime.throw_field_error, () -> convert_repr(fc, const_value(fc, T), Any), i)
+    end
     # (an index of another type, natively a TypeError or by the value's type, is not)
     nby = getfield_by_type(T) && T <: Tuple && i.typ === Int ? definite_fieldcount(T) : nothing
     if nby !== nothing

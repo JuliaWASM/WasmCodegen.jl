@@ -143,6 +143,10 @@ set_fixed(o::Int, k::Int) = (s = Fixed(1); v = COUNTS[k];
 # (an index of two types of integers, of a tuple that is an array)
 const LONG = ntuple(identity, 65)
 get_long(b::Bool) = try getfield(LONG, b ? 2 : Int32(2)) catch e; -code(e) end
+get_long_name(b::Bool) = try getfield(LONG, b ? 2 : :missing) catch e; -code(e) end
+# (a name or an index known not to be a field's, of a type whose fields cannot be set here)
+struct Named; x::Int; end
+set_missing(b::Bool) = try b ? setfield!(Named.name, :missing, 1) : setfield!(Named.name, 400, 1); 0 catch e; code(e) end
 set_many(i::Int) = (r = Ref(0);
     try setfield!(r, i, 7, :not_atomic, :extra); (r[], 0) catch e; (r[], order_code(e)) end)
 
@@ -207,6 +211,8 @@ set_many(i::Int) = (r = Ref(0);
             @wtest set_fixed(o, k)
         end
         @wtest get_long(true); @wtest get_long(false)
+        @wtest get_long_name(true); @wtest get_long_name(false)
+        @wtest set_missing(true); @wtest set_missing(false)
     end
     @testset "operator ccalls in Wasm" begin
         for i in 1:length(OPNAMES)
