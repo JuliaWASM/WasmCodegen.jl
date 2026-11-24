@@ -66,6 +66,24 @@ bswap_twice(x::Float64, y::Float32) = (bswap(bswap(x)) + 1.0, bswap(bswap(y)) * 
     @wtest bswap_twice(1.5, 2.25f0)
 end
 
+# a byte swap there and back by the bits: the same bits (of an ordinary value, -0.0 and a NaN
+# with a payload, which a swap through a float register could change)
+roundtrip_f64(u::UInt64) = reinterpret(UInt64, ntoh(hton(reinterpret(Float64, u))))
+roundtrip_f32(u::UInt32) = reinterpret(UInt32, bswap(bswap(reinterpret(Float32, u))))
+roundtrip_f16(u::UInt16) = reinterpret(UInt16, bswap(bswap(reinterpret(Float16, u))))
+
+@testset "byte swaps of floats there and back" begin
+    for u in (reinterpret(UInt64, 1.5), reinterpret(UInt64, -0.0), 0x7ff8000000000001)
+        @wtest roundtrip_f64(u)
+    end
+    for u in (reinterpret(UInt32, -0.1f0), reinterpret(UInt32, -0.0f0), 0x7fc00001)
+        @wtest roundtrip_f32(u)
+    end
+    for u in (reinterpret(UInt16, Float16(1.5)), reinterpret(UInt16, -zero(Float16)), 0x7e01)
+        @wtest roundtrip_f16(u)
+    end
+end
+
 i128ops(a::Int64, b::Int64) = (x = Int128(a) * Int128(b) * 1000; (x + 1, x - 7, x * 3, x ÷ 7, x % 7, x < 0, x >> 70, x << 3, leading_zeros(x), Int64(x >> 64)))
 u128div(a::UInt64, b::UInt64) = (x = UInt128(a) << 64 | b; (x ÷ UInt128(12345), x % UInt128(12345), x * x, count_ones(x)))
 cmp_rational(x::Float64) = x < 1 // 10^5
