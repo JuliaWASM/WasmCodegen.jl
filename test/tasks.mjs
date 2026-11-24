@@ -7,8 +7,9 @@
 // setTimeout(0) is armed before the call; the result says
 // whether it fired before the call returned. `shutdownAfter`: the host is shut down that many
 // ms into the call (which then fails); `settleAfter`: that many ms are waited after the call.
-// `external`: the call's first argument is a new external handle of the julia_io events, made
-// ready that many ms into the call (the result then has `externalClosed`: the module closed it).
+// `external`: the call's first arguments are two new external handles of the julia_io events,
+// the first made ready when the module closes the second (the result then has `externalClosed`:
+// the module closed the first).
 // A call that deadlocks (it never returns, as the native program hangs) is reported, and its
 // instance dropped. Prints the module's stdout as it goes and one JSON line per call (prefixed
 // with "@@ ") on stderr: {fn, result, ms, host, open, jsTimerFired}, {fn, trap, terminal} or
@@ -59,8 +60,8 @@ for (const c of calls) {
   if (c.external !== undefined) {
     externalClosed = false;
     const h = events.external({ onClose: () => { externalClosed = true; } });
-    args.unshift(h);
-    setTimeout(() => events.ready(h), c.external);
+    const signal = events.external({ onClose: () => events.ready(h) });
+    args.unshift(h, signal);
   }
   let jsTimerFired = null;
   if (c.jsTimer) { jsTimerFired = false; setTimeout(() => { jsTimerFired = true; }, 0); }

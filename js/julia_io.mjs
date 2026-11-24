@@ -72,9 +72,10 @@
 // **External handles** (the embedder's, not imports): a host library that starts work for the
 // module without suspending it (an HTTP request) hands the module `h = events.external({ onClose })`,
 // pending; `events.ready(h, message?)` makes it ready once the work is done (and wakes a
-// suspended `poll`), `false` if the module has closed it. The module waits for it as for a timer
-// (`Runtime.Host.await_handle`: with `tasks = :jspi`, a wait of its task alone). Its `close(h)`,
-// and `stop()` for those still open, call `onClose(h)`. The result is the library's business.
+// suspended `poll`), `false` if the module has closed it or the instance is stopped. The module
+// waits for it as for a timer (`Runtime.Host.await_handle`: with `tasks = :jspi`, a wait of its
+// task alone). Its `close(h)`, and `stop()` for those still open, release it and call
+// `onClose(h)`. The result is the library's business.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -392,7 +393,8 @@ export function makeJuliaIOEvents(opts = {}) {
   function ready(h, message) {
     const x = get(h);
     if (!x || x.kind !== 'external') return false;
-    if (!x.fired) { x.fired = true; x.deadline = performance.now(); x.errmsg = message ? String(message) : ''; notify(); }
+    const m = message ? String(message) : ''; // (may throw: before the handle changes)
+    if (!x.fired) { x.fired = true; x.deadline = performance.now(); x.errmsg = m; notify(); }
     return true;
   }
   // (the embedder's callback: its exception is not the module's)
@@ -501,6 +503,8 @@ export function makeJuliaIOEvents(opts = {}) {
       }
       for (;;) {
         await new Promise((r) => { waker = r; });
+        // (stopped since it was woken, in the same turn: its stack does not resume)
+        if (stopped) await new Promise(() => {});
         waker = null;
         const ready = readyOf(interest, cap);
         // (a starting timer that is due is armed, and wakes the poll, within a turn)
@@ -538,7 +542,7 @@ export function makeJuliaIOEvents(opts = {}) {
     const x = get(h);
     if (!x) return -E.BADF;
     if (!x.fired) {
-      disarm(x); x.fired = true; x.cancelled = true; x.errmsg = 'timer cancelled';
+      disarm(x); x.fired = true; x.cancelled = true; x.errmsg = x.kind === 'timer' ? 'timer cancelled' : 'cancelled';
       x.deadline = Math.min(x.deadline, performance.now());
       notify();
     }
@@ -584,7 +588,10 @@ export function makeJuliaIOEvents(opts = {}) {
       stopped = true;
       waker = null;
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-      for (const x of handles.values()) { disarm(x); if (!x.closed) { x.closed = true; closed(x); } }
+      // (released before their `onClose`, as `close` does: `ready` of them is `false` there)
+      const xs = [...handles.values()];
+      handles.clear();
+      for (const x of xs) { disarm(x); if (!x.closed) { x.closed = true; closed(x); } }
       if (turn !== null) { clearImmediate(turn); turn = null; }
       starting.length = 0;
     },
