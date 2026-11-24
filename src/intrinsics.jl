@@ -100,7 +100,9 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
     args = CGVal[a for a in args]
     f === II.cglobal && return emit_cglobal!(fc, args[1], typ)
     f === II.llvmcall && return emit_llvmcall!(fc, args, typ)
-    for a in args
+    for (i, a) in enumerate(args)
+        # (the value of a store is converted to the pointer's element type, as any other)
+        i == 2 && (f === II.pointerset || f === II.atomic_pointerset) && continue
         is_boxed_ptr_type(a.typ) &&
             unsupported("the intrinsic ", f, " on a pointer whose type is not concrete, ", a.typ)
     end

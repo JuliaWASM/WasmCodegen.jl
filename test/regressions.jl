@@ -365,6 +365,9 @@ end
 rg_ptr_add(p::Ptr, n::Int) = p + n
 rg_ptr_sub(p::Ptr, n::Int) = p - n
 rg_ptr_uint(p::Ptr) = UInt(p)
+rg_ptr_bits(p) = Core.Intrinsics.bitcast(UInt, p)
+# (not the value of a store: it is converted to the pointer's element type)
+rg_ptr_store(q::Ptr{Ptr{UInt8}}, x::Ptr) = Core.Intrinsics.pointerset(q, x, 1, 1)
 
 @testset "regressions" begin
     @wtest rg_unionfield(true, true)
@@ -482,12 +485,14 @@ rg_ptr_uint(p::Ptr) = UInt(p)
     end
     @wtest rg_singleton_nested(1); @wtest rg_singleton_nested(2)
     for (f, argtypes) in ((rg_ptr_add, (Ptr, Int)), (rg_ptr_sub, (Ptr, Int)), (rg_ptr_uint, (Ptr,)),
-                          (rg_ptr_add, (Ptr{T} where T<:Integer, Int)), (+, (Int, Ptr)))
+                          (rg_ptr_add, (Ptr{T} where T<:Integer, Int)), (+, (Int, Ptr)),
+                          (rg_ptr_bits, (Union{Ptr{Int},Ptr{UInt8}},)), (rg_ptr_bits, (Union{Cstring,Ptr{UInt8}},)))
         err = try wcompile(f, argtypes); nothing catch e; e end
         @test err isa WasmCodegen.UnsupportedConstructs &&
               occursin("on a pointer whose type is not concrete", sprint(showerror, err))
     end
     @test wcompile(rg_ptr_add, (Ptr{UInt8}, Int)) isa WasmCodegen.Compilation
+    @test wcompile(rg_ptr_store, (Ptr{Ptr{UInt8}}, Ptr)) isa WasmCodegen.Compilation
 end
 
 ## builtins called as the runtime rejects them (as natively: the same exceptions)
