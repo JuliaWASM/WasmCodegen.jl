@@ -74,7 +74,8 @@ let Runtime = WasmCodegen.Runtime
         # the type's and a static `Val` instead of `typeintersect` and `Val(N)`; another length
         # the same MethodError, by `Core.throw_methoderror` (`_tuple_error` makes the tuple
         # `(T, x)`, of an abstract type). Also for a UnionAll of a fixed length (`NTuple{3}`,
-        # `Tuple{T,Int} where T`): its fields' types are `fieldtype`'s of the UnionAll, as Base's.
+        # `Tuple{T,Int} where T`, `Tuple{Vararg{T,2}} where T`): its fields' types are `fieldtype`'s
+        # of the UnionAll, as Base's.
         # (The length is `nfields`, where Base has its static parameter: no method of `length`.)
         # (`x::Tuple`, the same signature as Base's `x::NTuple{N,Any}`, which it replaces, without
         # its static parameter `N`: for a UnionAll `T` inference reaches the method by constant
@@ -88,16 +89,29 @@ let Runtime = WasmCodegen.Runtime
                 xn isa Tn && return xn
                 return convert(Tn, xn)
             end
-            U = unwrap_unionall(T)
-            if U isa DataType && !isvatuple(U)
-                Core.nfields(x) == fieldcount(U) || Core.throw_methoderror(convert, T, x)
-                return ntuple(cvt1, Val(fieldcount(U)))
+            n = _tuple_fixed_length(T)
+            if n !== nothing
+                Core.nfields(x) == n || Core.throw_methoderror(convert, T, x)
+                return ntuple(cvt1, Val(n))
             end
             N = Core.nfields(x)
             if typeintersect(NTuple{N,Any}, T) === Union{}
                 _tuple_error(T, x)
             end
             return ntuple(cvt1, Val(N))::NTuple{N,Any}
+        end
+        # the number of fields of every value of the tuple type `T`; nothing where it is not one
+        # number (`fieldcount` has none for a `Vararg` of a known length that a UnionAll keeps,
+        # `Tuple{Vararg{T,2}} where T`)
+        Base.@assume_effects :foldable function _tuple_fixed_length(@nospecialize(T::Type))
+            U = unwrap_unionall(T)
+            U isa DataType || return nothing
+            p = U.parameters
+            n = length(p)
+            n == 0 && return 0
+            va = p[n]
+            isvarargtype(va) || return n
+            return isdefined(va, :N) && va.N isa Int ? n - 1 + va.N::Int : nothing
         end
         # (`typesplit` reflects on and makes types: a table of the module's types instead)
         nonnothing_nonmissing_typeinfo(io::IO) =
