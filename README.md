@@ -1,9 +1,9 @@
 # WasmCodegen.jl
 
-[![CI](https://github.com/gbaraldi/WasmCodegen.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/gbaraldi/WasmCodegen.jl/actions/workflows/CI.yml)
-[![Examples](https://github.com/gbaraldi/WasmCodegen.jl/actions/workflows/Pages.yml/badge.svg)](https://gbaraldi.github.io/WasmCodegen.jl/)
+[![CI](https://github.com/JuliaWASM/WasmCodegen.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaWASM/WasmCodegen.jl/actions/workflows/CI.yml)
+[![Examples](https://github.com/JuliaWASM/WasmCodegen.jl/actions/workflows/Pages.yml/badge.svg)](https://juliawasm.github.io/WasmCodegen.jl/)
 
-**[Live examples](https://gbaraldi.github.io/WasmCodegen.jl/)**: pages that run compiled Julia in
+**[Live examples](https://juliawasm.github.io/WasmCodegen.jl/)**: pages that run compiled Julia in
 the browser (ODE solvers, a ModelingToolkit model, Julia's parser, image filters), built from
 `main`.
 
@@ -138,7 +138,7 @@ parameters, `examples/mtk` simulates a ModelingToolkit model with sliders,
 solvers, `examples/juliasyntax` parses Julia source in the browser, and `examples/images`
 filters images with ImageFiltering's `imfilter` and a kernel of your choosing. The pages, built
 from `main` by the Pages workflow (`examples/site`), are at
-https://gbaraldi.github.io/WasmCodegen.jl/.
+https://juliawasm.github.io/WasmCodegen.jl/.
 
 ## Host runtimes
 
@@ -158,7 +158,7 @@ these need `--experimental-wasm-jspi`.
 
 For speed, keep the defaults: `wasm-opt -O3` and Node's own tiering. Node's
 `--liftoff-only`, `--no-liftoff` and `--no-wasm-dynamic-tiering` were each slower in
-[#43](https://github.com/gbaraldi/WasmCodegen.jl/issues/43).
+[#43](https://github.com/JuliaWASM/WasmCodegen.jl/issues/43).
 
 ### Browsers
 
