@@ -94,7 +94,7 @@ getref_any(k::Int) = (r = Ref(5); i = INDICES[k]; i isa Union{Int,Symbol,Int32} 
 # field, the ordering, the value's type), in compiled code's for one known (the value's type,
 # the ordering, a const field); too many arguments an ArgumentError
 mutable struct Counters; n::Int; @atomic a::Int; const c::Int; end
-const ORDERS = [:not_atomic, :release, :acquire, :none, :sequentially_consistent]
+const ORDERS = [:not_atomic, :release, :acquire, :none, :sequentially_consistent, :acquire_release]
 const COUNTER_KEYS = [:n, :a, :c]
 const COUNTS = Any[7, "s"]
 order_code(e) = e isa ConcurrencyViolationError ? 8 : e isa ArgumentError ? 9 : code(e)
@@ -112,6 +112,37 @@ set_known(o::Int, k::Int) = (s = Counters(0, 0, 0); v = COUNTS[k];
     catch e
         (counts(s), order_code(e))
     end)
+# (a field known and an ordering that is not: the builtin's order; an ordering of a type known
+# only at run time, a TypeError where it is no Symbol, before any other error)
+const ANY_ORDERS = Any[:not_atomic, :release, 1]
+set_known_field(i::Int, o::Int, k::Int) = (s = Counters(0, 0, 0); v = COUNTS[k];
+    try
+        i == 1 ? setfield!(s, :n, v, ORDERS[o]) : i == 2 ? setfield!(s, :a, v, ORDERS[o]) :
+        i == 3 ? setfield!(s, :c, v, ORDERS[o]) : setfield!(s, :n, v, ANY_ORDERS[min(o, 3)])
+        (counts(s), 0)
+    catch e
+        (counts(s), order_code(e))
+    end)
+set_acquire_release(v::Int) = (s = Counters(0, 0, 0);
+    try setfield!(s, :a, v, :acquire_release); (counts(s), 0) catch e; (counts(s), order_code(e)) end)
+# (an index that is no field's, known at compile time: a BoundsError at run time)
+set_out_of_bounds(b::Bool) = (r = Ref(0);
+    try b ? setfield!(r, 2, 7) : setfield!(r, 0, "s", :release); (r[], 0) catch e; (r[], order_code(e)) end)
+# of an immutable value: the error of a field and an ordering known comes after those of the
+# value's type and of the ordering, as in the code Julia compiles; before them otherwise
+struct Fixed; x::Int; end
+set_fixed(o::Int, k::Int) = (s = Fixed(1); v = COUNTS[k];
+    try
+        o == 1 ? setfield!(s, :x, v) : o == 2 ? setfield!(s, :x, v, :release) : o == 3 ? setfield!(s, :x, v, :none) :
+        o == 4 ? setfield!(s, :y, v) : o == 5 ? setfield!(s, 2, v) : o == 6 ? setfield!(s, COUNTER_KEYS[k], v) :
+        setfield!(s, :x, v, ORDERS[k + 1])
+        0
+    catch e
+        e isa ErrorException ? 10 + ((e.msg::String) == "setfield!: immutable struct of type Fixed cannot be changed") : order_code(e)
+    end)
+# (an index of two types of integers, of a tuple that is an array)
+const LONG = ntuple(identity, 65)
+get_long(b::Bool) = try getfield(LONG, b ? 2 : Int32(2)) catch e; -code(e) end
 set_many(i::Int) = (r = Ref(0);
     try setfield!(r, i, 7, :not_atomic, :extra); (r[], 0) catch e; (r[], order_code(e)) end)
 
@@ -167,6 +198,15 @@ set_many(i::Int) = (r = Ref(0);
             end
         end
         @wtest set_many(1)
+        for k in 1:2, o in 1:length(ORDERS), i in 1:4
+            @wtest set_known_field(i, o, k)
+        end
+        @wtest set_acquire_release(7)
+        @wtest set_out_of_bounds(true); @wtest set_out_of_bounds(false)
+        for k in 1:2, o in 1:7
+            @wtest set_fixed(o, k)
+        end
+        @wtest get_long(true); @wtest get_long(false)
     end
     @testset "operator ccalls in Wasm" begin
         for i in 1:length(OPNAMES)

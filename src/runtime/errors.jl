@@ -26,10 +26,10 @@
 @noinline throw_argument_error(msg::String) = throw(ArgumentError(msg))
 
 # whether the ordering of a store to a field (`setfield!`) is atomic; nothing for one that is
-# none (as the C runtime's `jl_get_atomic_order_checked`: a store does not acquire)
+# none (as the C runtime's `jl_get_atomic_order_checked`: a store alone does not acquire)
 store_order(order::Symbol) = order === :not_atomic ? false :
     (order === :unordered || order === :monotonic || order === :release ||
-     order === :acquire_release || order === :sequentially_consistent) ? true : nothing
+     order === :sequentially_consistent) ? true : nothing
 function checked_store_order(order::Symbol)
     atomic = store_order(order)
     atomic === nothing && throw(ConcurrencyViolationError("invalid atomic ordering"))
