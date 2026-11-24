@@ -18,9 +18,7 @@
 is_ptr_type(@nospecialize(T)) = T isa DataType && (T.name === Ptr.body.name || T === Cstring || T === Cwstring)
 
 "A type of pointers that is not one concrete `Ptr{T}` (`Ptr`, a union of pointer types): its values are objects, not an address and an owner."
-is_boxed_ptr_type(@nospecialize(T)) = T isa Type && T !== Union{} && !is_ptr_type(T) && only_ptr_types(T)
-only_ptr_types(@nospecialize(T)) = T isa Union ? only_ptr_types(T.a) && only_ptr_types(T.b) :
-                                   T <: Ptr || T === Cstring || T === Cwstring
+is_boxed_ptr_type(@nospecialize(T)) = T isa Type && T !== Union{} && !is_ptr_type(T) && T <: Union{Ptr,Cstring,Cwstring}
 
 "The address of the pointer `p`, as a UInt64."
 ptr_address(p::CGVal) = CGVal(UInt64, Inline, LeafVal[p.leaves[1]], nothing)

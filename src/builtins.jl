@@ -162,6 +162,26 @@ function field_index_error!(fc::FnCtx, name::Symbol, i::CGVal)
 end
 
 """
+    checked_value!(fc, name, T, v) -> CGVal
+
+The value `v` as one of type `T`; one of another type the TypeError of the builtin `name`
+(and no value), checked at run time where `v`'s type does not tell.
+"""
+function checked_value!(fc::FnCtx, name::Symbol, @nospecialize(T), v::CGVal)
+    type_error() = throw_error!(fc, Runtime.throw_builtin_type_error, const_value(fc, name),
+                                () -> convert_repr(fc, const_value(fc, T), Any), () -> convert_repr(fc, v, Any))
+    t = emit_isa!(fc, v, T)
+    if isconstant(t)
+        constant_value(t) || return type_error()
+    else
+        push_val!(fc, t)
+        emit!(fc.b, :i32_eqz)
+        if!(fc.b); type_error(); end!(fc.b)
+    end
+    return v.typ <: T ? v : convert_repr(fc, v, typeintersect(v.typ, T))
+end
+
+"""
 Whether a field of a value of type `T` is found by the value's type at run time: `T` is not
 concrete and has no layout of fields of its own (abstract, a `Union`, a `UnionAll`, a tuple of
 an element type not concrete, as `Tuple{Type, String}`; inline tuples, tuples of unknown length

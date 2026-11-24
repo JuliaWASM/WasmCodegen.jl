@@ -368,6 +368,17 @@ rg_ptr_uint(p::Ptr) = UInt(p)
 rg_ptr_bits(p) = Core.Intrinsics.bitcast(UInt, p)
 # (not the value of a store: it is converted to the pointer's element type)
 rg_ptr_store(q::Ptr{Ptr{UInt8}}, x::Ptr) = Core.Intrinsics.pointerset(q, x, 1, 1)
+# a store of a pointer of another type: the TypeError of the intrinsic
+function rg_ptr_store_checked(b::Bool, n::Int)
+    a = Ptr{UInt8}[C_NULL]
+    x = b ? Ptr{Int}(n) : Ptr{UInt8}(n)
+    GC.@preserve a try
+        Core.Intrinsics.pointerset(pointer(a), x, 1, 1)
+    catch e
+        return e isa TypeError && e.func === :pointerset && e.expected === Ptr{UInt8} && e.got === x ? -1 : -2
+    end
+    return Int(UInt(a[1]))
+end
 
 @testset "regressions" begin
     @wtest rg_unionfield(true, true)
@@ -486,13 +497,20 @@ rg_ptr_store(q::Ptr{Ptr{UInt8}}, x::Ptr) = Core.Intrinsics.pointerset(q, x, 1, 1
     @wtest rg_singleton_nested(1); @wtest rg_singleton_nested(2)
     for (f, argtypes) in ((rg_ptr_add, (Ptr, Int)), (rg_ptr_sub, (Ptr, Int)), (rg_ptr_uint, (Ptr,)),
                           (rg_ptr_add, (Ptr{T} where T<:Integer, Int)), (+, (Int, Ptr)),
-                          (rg_ptr_bits, (Union{Ptr{Int},Ptr{UInt8}},)), (rg_ptr_bits, (Union{Cstring,Ptr{UInt8}},)))
+                          (rg_ptr_bits, (Union{Ptr{Int},Ptr{UInt8}},)), (rg_ptr_bits, (Union{Cstring,Ptr{UInt8}},)),
+                          (rg_ptr_bits, (Union{Cstring,Ptr{T}} where T<:Integer,)))
         err = try wcompile(f, argtypes); nothing catch e; e end
         @test err isa WasmCodegen.UnsupportedConstructs &&
               occursin("on a pointer whose type is not concrete", sprint(showerror, err))
     end
+    # (of a pointer or an integer: no reinterpretation of an object either)
+    err = try wcompile(rg_ptr_bits, (Union{Ptr{UInt8},UInt64},)); nothing catch e; e end
+    @test err isa WasmCodegen.UnsupportedConstructs && occursin("bitcast of a value whose type is not concrete", sprint(showerror, err))
     @test wcompile(rg_ptr_add, (Ptr{UInt8}, Int)) isa WasmCodegen.Compilation
+    # (a union of them is split by inference: each call is of a concrete one)
+    @test wcompile(rg_ptr_add, (Union{Ptr{Int},Ptr{UInt8}}, Int)) isa WasmCodegen.Compilation
     @test wcompile(rg_ptr_store, (Ptr{Ptr{UInt8}}, Ptr)) isa WasmCodegen.Compilation
+    @wtest rg_ptr_store_checked(false, 42); @wtest rg_ptr_store_checked(true, 42)
 end
 
 ## builtins called as the runtime rejects them (as natively: the same exceptions)

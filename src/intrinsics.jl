@@ -303,7 +303,11 @@ function emit_intrinsic!(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{Any}
     elseif f === II.atomic_pointerset || f === II.pointerset
         p = args[1]
         T = eltype(p.typ)
-        v = T === Cvoid || !isconcretetype(T) ? args[2] : convert_repr(fc, args[2], T)
+        v = args[2]
+        if T !== Cvoid && isconcretetype(T)
+            v = checked_value!(fc, f === II.pointerset ? :pointerset : :atomic_pointerset, T, v)
+            v.kind === Bottom && return v
+        end
         return ptr_store!(fc, p, v, f === II.pointerset ? args[3] : const_value(fc, 1))
     end
     unsupported("the intrinsic ", f)
@@ -369,6 +373,7 @@ function emit_bitcast!(fc::FnCtx, @nospecialize(R), x::CGVal)
         x = ptr_address(x)
         S = UInt64
     end
+    isconcretetype(S) || unsupported("bitcast of a value whose type is not concrete, ", S)
     sizeof(R) == sizeof(S) || unsupported("bitcast from ", S, " to ", R)
     lr, ls = layout(fc, R), layout(fc, S)
     tr, ts = lr.leaves[1].type, ls.leaves[1].type
