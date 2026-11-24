@@ -75,6 +75,7 @@ let Runtime = WasmCodegen.Runtime
         # the same MethodError, by `Core.throw_methoderror` (`_tuple_error` makes the tuple
         # `(T, x)`, of an abstract type). Also for a UnionAll of a fixed length (`NTuple{3}`,
         # `Tuple{T,Int} where T`): its fields' types are `fieldtype`'s of the UnionAll, as Base's.
+        # (The length is `nfields`, where Base has its static parameter: no method of `length`.)
         # (`x::Tuple`, the same signature as Base's `x::NTuple{N,Any}`, which it replaces, without
         # its static parameter `N`: for a UnionAll `T` inference reaches the method by constant
         # propagation, whose result is not inlined with a static parameter unknown, and the
@@ -89,10 +90,10 @@ let Runtime = WasmCodegen.Runtime
             end
             U = unwrap_unionall(T)
             if U isa DataType && !isvatuple(U)
-                length(x) == fieldcount(U) || Core.throw_methoderror(convert, T, x)
+                Core.nfields(x) == fieldcount(U) || Core.throw_methoderror(convert, T, x)
                 return ntuple(cvt1, Val(fieldcount(U)))
             end
-            N = length(x)
+            N = Core.nfields(x)
             if typeintersect(NTuple{N,Any}, T) === Union{}
                 _tuple_error(T, x)
             end

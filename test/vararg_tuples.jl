@@ -60,6 +60,9 @@ bits(t::Tuple) = (s = 0; for b in t; s = 2s + b; end; s)
 cvt_mwe() = (t = convert(NTuple{3,Bool}, (V...,)); t[1] + 2 * t[2] + 4 * t[3])
 cvt_bool3(n::Int) = try bits(convert(NTuple{3,Bool}, (BS[1:n]...,))) catch e; e isa MethodError ? -1 : -2 end
 cvt_bool13(n::Int) = try bits(convert(NTuple{13,Bool}, (BS[1:n]...,))) catch e; e isa MethodError ? -1 : -2 end
+# (the MethodError's function and arguments, as Base's `_tuple_error` makes them)
+cvt_error(n::Int) = try convert(NTuple{3,Bool}, (BS[1:n]...,)); 0
+                    catch e; e isa MethodError && e.f === convert && (a = e.args; a isa Tuple{Any,Any} && a[1] === NTuple{3,Bool}) ? 1 : 2 end
 cvt_float(n::Int) = try (t = convert(NTuple{3,Float64}, (IS[1:n]...,)); t[1] + t[2] / 4 + t[3] / 16)
                     catch e; e isa MethodError ? -1.0 : -2.0 end
 cvt_mixed(n::Int) = try (t = convert(Tuple{Float64,Int,Float64}, (IS[1:n]...,)); t[1] + t[2] / 4 + t[3] / 16)
@@ -113,6 +116,12 @@ vec_selectdim(n::Int, d::Int) = (y = collect(1.0:n); selectdim(y, d, 1) .*= 2; s
                           (cvt_mixed, (Int,)), (cvt_ntuple3, (Int,)), (cvt_tint, (Int, Int)),
                           (cvt_ntint, (Int, Int)))
             @test (WasmCodegen.compile(f, args; config=WasmCodegen.Config(verify=:error)); true)
+        end
+        # (the results of Base's method, which the trim patches replace here too)
+        @test cvt_mwe() == 5 && cvt_bool3(3) == 5 && cvt_bool3(2) == -1 && cvt_float(3) == 1.6875 &&
+              cvt_tint(1, 2) === 21.5 && cvt_tint(3, 2) === -3.0 && cvt_ntint(2, 2) === 32 && cvt_error(3) == 0
+        for n in 2:4
+            @wtest cvt_error(n)
         end
         @wtest cvt_mwe()
         for n in 2:4
