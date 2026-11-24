@@ -48,18 +48,21 @@ check('a pending external handle is not ready', events.handleState(a).ready === 
 check('ready makes it ready (once)', events.ready(a) === true && events.handleState(a).ready && events.ready(a) === true);
 check('a poll finds the ready one only', JSON.stringify(await pollOf([a, b], 0)) === JSON.stringify([a]));
 // a poll that suspends until b is ready
-setTimeout(() => events.ready(b), 20);
-const t0 = performance.now();
 const pending = pollOf([b], -1);
-await new Promise((r) => setTimeout(r, 5));
+let resumedEarly = false, isReady = false;
+pending.then(() => { resumedEarly = !isReady; });
+await turns(5);
+isReady = true;
+events.ready(b);
 const got = await pending;
-check('an indefinite poll of a pending one waits until ready()', got[0] === b && performance.now() - t0 >= 15);
+check('an indefinite poll of a pending one waits until ready()', got[0] === b && !resumedEarly);
 events.imports.close(a);
 check('close: onClose, and ready() of a closed handle is false', closed === 1 && events.ready(a) === false);
 // cancelled by the module: ready, with a message of its own (the embedder's ready() then changes nothing)
 const d = events.external();
 check('cancel: ready, its message not a timer\'s', events.imports.cancel(d) === 0 && events.handleState(d).cancelled &&
       errmsg(d) === 'cancelled' && events.ready(d, 'late') === true && errmsg(d) === 'cancelled');
+check('... nor is a message of a ready one looked at', events.ready(d, Object.create(null)) === true && errmsg(d) === 'cancelled');
 // a message that cannot be a string: ready() throws, the handle stays pending (a poll of it is woken by the next one)
 const c = events.external();
 const waiting = pollOf([c], -1);
@@ -67,9 +70,18 @@ let threw = false;
 try { events.ready(c, Object.create(null)); } catch (e) { threw = true; }
 check('ready with a message that is no string throws, and leaves it pending', threw && events.handleState(c).ready === false);
 check('... a later ready() wakes its poll', events.ready(c) === true && (await Promise.race([waiting, turns(200)]))?.[0] === c);
+// a message whose conversion closes the handle: not ready, it is gone
+const g = events.external();
+check('ready with a message that closes the handle is false',
+      events.ready(g, { toString() { events.imports.close(g); return 'gone'; } }) === false && events.handleState(g) === null);
+// an onClose that throws (a value without a string, even), or rejects, does not keep stop() from closing the others
+events.external({ onClose: () => { throw Object.create(null); } });
+events.external({ onClose: async () => { throw new Error('rejected'); } });
 const e = events.external({ onClose: () => { closed++; } });
-events.stop();
-check('stop: the open external handles closed', closed === 2);
+let stopThrew = false;
+try { events.stop(); } catch (err) { stopThrew = true; }
+await turns(5);
+check('stop: the open external handles closed, whatever their onClose throws', closed === 2 && !stopThrew);
 check('... and released: ready() is false, none open', events.ready(e) === false && events.stats().open === 0);
 // stop() in the turn of the ready() that woke a suspended poll: the poll does not resume
 {

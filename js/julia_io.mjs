@@ -112,7 +112,8 @@ export class GuestError extends Error {
 }
 
 function describe(e) {
-  if (!(e instanceof Error)) return String(e);
+  // (a value without a string, as an object of no prototype, has no message)
+  if (!(e instanceof Error)) { try { return String(e); } catch { return 'an exception that is not an Error'; } }
   let m = e.message;
   const c = e.cause;
   if (c) m += ': ' + (c.code ? c.code + ' ' : '') + (c.message || String(c));
@@ -393,14 +394,22 @@ export function makeJuliaIOEvents(opts = {}) {
   function ready(h, message) {
     const x = get(h);
     if (!x || x.kind !== 'external') return false;
+    if (x.fired) return true; // (ready once: a later message is not looked at)
     const m = message ? String(message) : ''; // (may throw: before the handle changes)
+    // (the conversion ran the embedder's code, which may have closed the handle, or readied it)
+    if (get(h) !== x) return false;
     if (!x.fired) { x.fired = true; x.deadline = performance.now(); x.errmsg = m; notify(); }
     return true;
   }
-  // (the embedder's callback: its exception is not the module's)
+  // (the embedder's callback: its exception, or the rejection of an async one, is not the
+  // module's, and does not keep `stop` from closing the other handles)
   function closed(x) {
     if (x.kind !== 'external' || typeof x.onClose !== 'function') return;
-    try { x.onClose(x.id); } catch (e) { lastError = describe(e); }
+    const failed = (e) => { lastError = describe(e); };
+    try {
+      const r = x.onClose(x.id);
+      if (r && typeof r.then === 'function') r.then(undefined, failed);
+    } catch (e) { failed(e); }
   }
 
   // ---- timers ----
@@ -583,7 +592,8 @@ export function makeJuliaIOEvents(opts = {}) {
     },
     // The instance is done (it trapped, or its embedder shut it down: `julia_task.mjs` calls
     // this): a suspended `poll` never resumes its stack, the timers are released, and later
-    // calls are errors.
+    // calls are errors. (A `poll` that has returned to the module already, its stack resumed
+    // by the host in a later microtask, runs the module until its next call.)
     stop() {
       stopped = true;
       waker = null;
