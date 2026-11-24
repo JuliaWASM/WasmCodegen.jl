@@ -81,6 +81,39 @@ setkey_order(i::Int, v::Float64) = (p = Point3(1.0, 2.0, 3, 4);
 # (of a Ref, as Makie's ComputePipeline: `setproperty!(::RefValue, name, v)`)
 setref(k::Int, v::Float64) = (r = Ref(0.0);
     try setproperty!(r, NAMES[k], v); (r[], 0) catch e; (r[], code(e)) end)
+# (an index of a type known only at run time: an Int, a name, or neither, a TypeError)
+const INDICES = Any[1, :x, :y, 2, 1.5, Int32(1)]
+setref_any(k::Int) = (r = Ref(0);
+    try setfield!(r, INDICES[k], 7); (r[], 0) catch e; (r[], code(e)) end)
+setref_ints(b::Bool) = (r = Ref(0);
+    try setfield!(r, b ? 1 : Int32(1), 7); (r[], 0) catch e; (r[], code(e)) end)
+getref_any(k::Int) = (r = Ref(5); i = INDICES[k]; i isa Union{Int,Symbol,Int32} || return -9;
+    try getfield(r, i) catch e; -code(e) end)
+# an ordering: a ConcurrencyViolationError where it is none of a store, or its atomicity is
+# not the field's; the errors in the builtin's order for a field known at run time (a const
+# field, the ordering, the value's type), in compiled code's for one known (the value's type,
+# the ordering, a const field); too many arguments an ArgumentError
+mutable struct Counters; n::Int; @atomic a::Int; const c::Int; end
+const ORDERS = [:not_atomic, :release, :acquire, :none, :sequentially_consistent]
+const COUNTER_KEYS = [:n, :a, :c]
+const COUNTS = Any[7, "s"]
+order_code(e) = e isa ConcurrencyViolationError ? 8 : e isa ArgumentError ? 9 : code(e)
+counts(s::Counters) = (s.n, @atomic(s.a), s.c)
+set_ordered(i::Int, o::Int, k::Int) = (s = Counters(0, 0, 0);
+    try setfield!(s, COUNTER_KEYS[i], COUNTS[k], ORDERS[o]); (counts(s), 0) catch e; (counts(s), order_code(e)) end)
+set_unordered(i::Int, k::Int) = (s = Counters(0, 0, 0);
+    try setfield!(s, i, COUNTS[k]); (counts(s), 0) catch e; (counts(s), order_code(e)) end)
+set_known(o::Int, k::Int) = (s = Counters(0, 0, 0); v = COUNTS[k];
+    try
+        o == 1 ? setfield!(s, :a, v) : o == 2 ? setfield!(s, :n, v, :release) : o == 3 ? setfield!(s, :a, v, :acquire) :
+        o == 4 ? setfield!(s, :a, v, :release) : o == 5 ? setfield!(s, :c, v, :release) : o == 6 ? setfield!(s, :c, v, :none) :
+        o == 7 ? setfield!(s, :n, "s", :release) : setfield!(s, :c, v)
+        (counts(s), 0)
+    catch e
+        (counts(s), order_code(e))
+    end)
+set_many(i::Int) = (r = Ref(0);
+    try setfield!(r, i, 7, :not_atomic, :extra); (r[], 0) catch e; (r[], order_code(e)) end)
 
 @testset "run-time reflection without the C runtime" begin
     @testset "modules" begin
@@ -116,6 +149,24 @@ setref(k::Int, v::Float64) = (r = Ref(0.0);
         for k in 1:2
             @wtest setref(k, 3.0)
         end
+        for k in 1:length(INDICES)
+            @wtest setref_any(k)
+            @wtest getref_any(k)
+        end
+        @wtest setref_ints(true)
+        @wtest setref_ints(false)
+        for k in 1:2
+            for i in 1:3
+                @wtest set_unordered(i, k)
+                for o in 1:length(ORDERS)
+                    @wtest set_ordered(i, o, k)
+                end
+            end
+            for o in 1:8
+                @wtest set_known(o, k)
+            end
+        end
+        @wtest set_many(1)
     end
     @testset "operator ccalls in Wasm" begin
         for i in 1:length(OPNAMES)

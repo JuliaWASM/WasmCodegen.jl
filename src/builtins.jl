@@ -337,6 +337,72 @@ function set_field!(fc::FnCtx, x::CGVal, i::Int, v::CGVal)
     return v
 end
 
+"""
+    checked_field_value!(fc, T, k, v) -> CGVal
+
+The value `v` as one the field `k` of `T` takes; one of another type the TypeError of
+`setfield!` (and no value), checked at run time where `v`'s type does not tell.
+"""
+function checked_field_value!(fc::FnCtx, @nospecialize(T), k::Int, v::CGVal)
+    FT = fieldtype(T, k)
+    type_error() = throw_error!(fc, Runtime.throw_builtin_type_error, () -> const_value(fc, :setfield!),
+                                () -> convert_repr(fc, const_value(fc, FT), Any), () -> convert_repr(fc, v, Any))
+    t = emit_isa!(fc, v, FT)
+    if isconstant(t)
+        constant_value(t) || return type_error()
+    else
+        push_val!(fc, t)
+        emit!(fc.b, :i32_eqz)
+        if!(fc.b); type_error(); end!(fc.b)
+    end
+    return v.typ <: FT ? v : convert_repr(fc, v, typeintersect(v.typ, FT))
+end
+
+"""
+    store_order!(fc, args) -> CGVal
+
+Whether the ordering of the `setfield!` of `args` (its fourth, else not atomic) is atomic, a
+Bool; one that is no ordering of a store a ConcurrencyViolationError (and no value).
+"""
+function store_order!(fc::FnCtx, args::Vector{Any})
+    length(args) == 3 && return const_value(fc, false)
+    order = args[4]::CGVal
+    if isconstant(order)
+        o = constant_value(order)
+        o isa Symbol ||
+            return throw_error!(fc, Runtime.throw_builtin_type_error, const_value(fc, :setfield!),
+                                () -> convert_repr(fc, const_value(fc, Symbol), Any), () -> convert_repr(fc, order, Any))
+        atomic = Runtime.store_order(o)
+        atomic === nothing &&
+            return throw_error!(fc, Runtime.throw_concurrency_error, () -> const_value(fc, "invalid atomic ordering"))
+        return const_value(fc, atomic)
+    end
+    order.typ === Symbol || unsupported("setfield! with an ordering of type ", order.typ)
+    return call_runtime!(fc, Runtime.checked_store_order, CGVal[order])
+end
+
+"""
+    store_order_error!(fc, T, k, atomic) -> Bool
+
+The ConcurrencyViolationError of a store to the field `k` of `T` by an ordering whose
+atomicity (`atomic`, a Bool) is not the field's; whether it is thrown always.
+"""
+function store_order_error!(fc::FnCtx, @nospecialize(T), k::Int, atomic::CGVal)
+    field_atomic = Base.isfieldatomic(T, k)
+    err() = throw_error!(fc, Runtime.throw_concurrency_error,
+                         () -> const_value(fc, field_atomic ? "setfield!: atomic field cannot be written non-atomically" :
+                                                              "setfield!: non-atomic field cannot be written atomically"))
+    if isconstant(atomic)
+        constant_value(atomic) == field_atomic && return false
+        err()
+        return true
+    end
+    push_val!(fc, atomic)
+    field_atomic && emit!(fc.b, :i32_eqz)
+    if!(fc.b); err(); end!(fc.b)
+    return false
+end
+
 ## builtins
 
 """
@@ -390,28 +456,41 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         end
         return get_field_dynamic(fc, x, idx, typ)
     elseif f === Core.setfield!
+        3 <= length(args) <= 4 ||
+            return throw_error!(fc, Runtime.throw_argument_error,
+                                () -> const_value(fc, length(args) < 3 ? "setfield!: too few arguments (expected 3)" :
+                                                                         "setfield!: too many arguments (expected 4)"))
         x, idx, v = args[1], args[2], args[3]
         T = x.typ
-        # (the errors of the C runtime, in its order: an immutable value, the index, a const field;
-        # an ordering is checked before them)
-        ordered() = length(args) == 3 || unsupported("setfield! with an ordering, of a value of type ", T)
-        T === Module && ordered() &&
+        # (the errors of the C runtime, in its order: the ordering, an immutable value, the index,
+        # a const field, an ordering that is not the field's, the value's type)
+        atomic = store_order!(fc, args)
+        atomic.kind === Bottom && return atomic
+        T === Module &&
             return throw_error!(fc, Runtime.throw_error_message, const_value(fc, "cannot assign variables in other modules"))
-        T isa DataType && isconcretetype(T) && !ismutabletype(T) && ordered() &&
+        T isa DataType && isconcretetype(T) && !ismutabletype(T) &&
             return throw_error!(fc, Runtime.throw_error_message,
                                 const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
         # (of a value whose type is not known, natively the errors above may come first)
         if bad_field_index(idx.typ)
-            (T isa DataType && isconcretetype(T) && ordered()) ||
+            (T isa DataType && isconcretetype(T)) ||
                 unsupported("setfield! with a field of type ", idx.typ, " of a value of type ", T)
             return field_index_error!(fc, :setfield!, idx)
         end
-        isconstant(idx) || return set_field_dynamic!(fc, x, idx, v)
+        isconstant(idx) || return set_field_dynamic!(fc, x, idx, v, atomic)
         is_no_field(T, constant_value(idx)) && return no_field!(fc, T, constant_value(idx))
         i = field_index(T, constant_value(idx))
-        T isa DataType && isconcretetype(T) && isconst(T, i) && ordered() &&
-            return throw_error!(fc, Runtime.throw_error_message,
-                                const_value(fc, string("setfield!: const field .", fieldname(T, i), " of type ", T.name.name, " cannot be changed")))
+        if T isa DataType && isconcretetype(T)
+            # (in the order of the code Julia compiles for a field it knows: the value's type,
+            # the ordering, a const field; the builtin's, as for a field it does not know, is
+            # the const field, the ordering, the value's type)
+            v = checked_field_value!(fc, T, i, v)
+            v.kind === Bottom && return v
+            store_order_error!(fc, T, i, atomic) && return bottom()
+            isconst(T, i) &&
+                return throw_error!(fc, Runtime.throw_error_message,
+                                    const_value(fc, string("setfield!: const field .", fieldname(T, i), " of type ", T.name.name, " cannot be changed")))
+        end
         return set_field!(fc, x, i, v)
     elseif f === Core.swapfield! || f === Core.modifyfield! || f === Core.replacefield! ||
            (isdefined(Core, :setfieldonce!) && f === Core.setfieldonce!)
@@ -696,36 +775,28 @@ function get_field_dynamic(fc::FnCtx, x::CGVal, i::CGVal, @nospecialize(typ))
 end
 
 """
-    set_field_dynamic!(fc, x, i, v) -> CGVal
+    set_field_dynamic!(fc, x, i, v, atomic) -> CGVal
 
 `setfield!(x, i, v)` of the run-time index or name `i` (checked as by `get_field_dynamic`): a
 chain of tests of the index, each field a store of `v`, checked at run time where `v`'s type
-does not tell whether the field's admits it; as natively, a TypeError where it does not, and
-an error for a const field.
+does not tell whether the field's admits it; as natively, a TypeError where it does not, an
+error for a const field, and for an ordering (`atomic`, see `store_order!`) that is not the
+field's.
 """
-function set_field_dynamic!(fc::FnCtx, x::CGVal, i::CGVal, v::CGVal)
+function set_field_dynamic!(fc::FnCtx, x::CGVal, i::CGVal, v::CGVal, atomic::CGVal)
     T = x.typ
-    (T isa DataType && isconcretetype(T) && ismutabletype(T) && (i.typ === Symbol || i.typ <: Integer)) ||
+    (T isa DataType && isconcretetype(T) && ismutabletype(T)) ||
         unsupported("setfield! of a value of type ", T, " with a field not known at compile time")
-    idx = checked_field_index!(fc, x, i)
+    idx = checked_field_index!(fc, x, i, :setfield!)
     for_field_at!(fc, idx, fieldcount(T)) do k
         if isconst(T, k)
             throw_error!(fc, Runtime.throw_error_message,
                          () -> const_value(fc, string("setfield!: const field .", fieldname(T, k), " of type ", T.name.name, " cannot be changed")))
             return
         end
-        FT = fieldtype(T, k)
-        type_error() = throw_error!(fc, Runtime.throw_builtin_type_error, () -> const_value(fc, :setfield!),
-                                    () -> convert_repr(fc, const_value(fc, FT), Any), () -> convert_repr(fc, v, Any))
-        t = emit_isa!(fc, v, FT)
-        if isconstant(t)
-            constant_value(t) || (type_error(); return)
-        else
-            push_val!(fc, t)
-            emit!(fc.b, :i32_eqz)
-            if!(fc.b); type_error(); end!(fc.b)
-        end
-        set_field!(fc, x, k, v.typ <: FT ? v : convert_repr(fc, v, typeintersect(v.typ, FT)))
+        store_order_error!(fc, T, k, atomic) && return
+        vk = checked_field_value!(fc, T, k, v)
+        vk.kind === Bottom || set_field!(fc, x, k, vk)
     end
     return v
 end
@@ -739,9 +810,25 @@ function definite_fieldcount(@nospecialize(T))
 end
 
 # the index (an Int) of the field of `x` at the run-time index or name `i`, checked: out of
-# bounds a BoundsError, a name that is not a field's a FieldError
-function checked_field_index!(fc::FnCtx, x::CGVal, i::CGVal)
+# bounds a BoundsError, a name that is not a field's a FieldError; of a type known only at run
+# time, whichever it is, and neither the TypeError of the builtin `name`
+function checked_field_index!(fc::FnCtx, x::CGVal, i::CGVal, name::Symbol=:getfield)
     T = x.typ
+    if i.typ !== Int && i.typ !== Symbol
+        idx = new_val!(fc, Int)
+        cases = Any[I for I in (Int, Symbol) if typeintersect(i.typ, I) !== Union{}]
+        for I in cases
+            push_val!(fc, emit_isa!(fc, i, I))
+            if!(fc.b); open_label!(fc)
+            assign!(fc, idx, checked_field_index!(fc, x, convert_repr(fc, i, I), name))
+            else!(fc.b)
+        end
+        field_index_error!(fc, name, i)
+        for _ in cases
+            end!(fc.b); close_label!(fc)
+        end
+        return idx
+    end
     if i.typ === Symbol
         name = i
         i = field_index_of!(fc, T, i)

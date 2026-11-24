@@ -23,6 +23,18 @@
 @noinline throw_not_cfunction() = error("a ccall through a pointer that is not a cfunction of the call's signature")
 @noinline throw_not_c_ref() = throw(ArgumentError("a cfunction's Ref argument that is not a pointer to a Ref of its type"))
 @noinline throw_concurrency_error(msg::String) = throw(ConcurrencyViolationError(msg))
+@noinline throw_argument_error(msg::String) = throw(ArgumentError(msg))
+
+# whether the ordering of a store to a field (`setfield!`) is atomic; nothing for one that is
+# none (as the C runtime's `jl_get_atomic_order_checked`: a store does not acquire)
+store_order(order::Symbol) = order === :not_atomic ? false :
+    (order === :unordered || order === :monotonic || order === :release ||
+     order === :acquire_release || order === :sequentially_consistent) ? true : nothing
+function checked_store_order(order::Symbol)
+    atomic = store_order(order)
+    atomic === nothing && throw(ConcurrencyViolationError("invalid atomic ordering"))
+    return atomic
+end
 # a Memory of `n` elements: negative, or larger than a Wasm array
 @noinline throw_memory_size_error(n::Int) = n < 0 ?
     throw(ArgumentError("invalid GenericMemory size: the number of elements is either negative or too large for system address width")) :
