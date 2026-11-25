@@ -167,6 +167,12 @@ verified. The example pages' error message gives the versions that added WebAsse
 (Chrome 119, Firefox 120, Safari 18.2), which is not all a module may use. Browser support
 for `exnref` and JSPI hasn't been tested here.
 
+A host library that starts work for the module without suspending it (an HTTP request, say)
+hands the module a handle of the `julia_io` events, `events.external({ onClose })`, and makes it
+ready with `events.ready(h)` when the work is done: the module waits for it as for a timer
+(`Runtime.Host.await_handle`; with `tasks = :jspi`, a wait of that task alone, while the others
+run). See "External handles" in `js/julia_io.mjs`.
+
 ### wasmtime
 
 Tested with wasmtime 50.0.1.
