@@ -1,9 +1,9 @@
 # WasmCodegen.jl
 
-[![CI](https://github.com/gbaraldi/WasmCodegen.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/gbaraldi/WasmCodegen.jl/actions/workflows/CI.yml)
-[![Examples](https://github.com/gbaraldi/WasmCodegen.jl/actions/workflows/Pages.yml/badge.svg)](https://gbaraldi.github.io/WasmCodegen.jl/)
+[![CI](https://github.com/JuliaWASM/WasmCodegen.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaWASM/WasmCodegen.jl/actions/workflows/CI.yml)
+[![Examples](https://github.com/JuliaWASM/WasmCodegen.jl/actions/workflows/Pages.yml/badge.svg)](https://juliawasm.github.io/WasmCodegen.jl/)
 
-**[Live examples](https://gbaraldi.github.io/WasmCodegen.jl/)**: pages that run compiled Julia in
+**[Live examples](https://juliawasm.github.io/WasmCodegen.jl/)**: pages that run compiled Julia in
 the browser (ODE solvers, a ModelingToolkit model, Julia's parser, image filters), built from
 `main`.
 
@@ -138,7 +138,7 @@ parameters, `examples/mtk` simulates a ModelingToolkit model with sliders,
 solvers, `examples/juliasyntax` parses Julia source in the browser, and `examples/images`
 filters images with ImageFiltering's `imfilter` and a kernel of your choosing. The pages, built
 from `main` by the Pages workflow (`examples/site`), are at
-https://gbaraldi.github.io/WasmCodegen.jl/.
+https://juliawasm.github.io/WasmCodegen.jl/.
 
 ## Host runtimes
 
@@ -158,7 +158,7 @@ these need `--experimental-wasm-jspi`.
 
 For speed, keep the defaults: `wasm-opt -O3` and Node's own tiering. Node's
 `--liftoff-only`, `--no-liftoff` and `--no-wasm-dynamic-tiering` were each slower in
-[#43](https://github.com/gbaraldi/WasmCodegen.jl/issues/43).
+[#43](https://github.com/JuliaWASM/WasmCodegen.jl/issues/43).
 
 ### Browsers
 
@@ -166,6 +166,12 @@ Only V8 has been checked, through Node and workerd. No minimum browser version h
 verified. The example pages' error message gives the versions that added WebAssembly GC
 (Chrome 119, Firefox 120, Safari 18.2), which is not all a module may use. Browser support
 for `exnref` and JSPI hasn't been tested here.
+
+A host library that starts work for the module without suspending it (an HTTP request, say)
+hands the module a handle of the `julia_io` events, `events.external({ onClose })`, and makes it
+ready with `events.ready(h)` when the work is done: the module waits for it as for a timer
+(`Runtime.Host.await_handle`; with `tasks = :jspi`, a wait of that task alone, while the others
+run). See "External handles" in `js/julia_io.mjs`.
 
 ### wasmtime
 

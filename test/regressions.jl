@@ -118,6 +118,19 @@ rg_vt_typevar(i::Int) = (x = RG_TV_VALUES[i]; (x isa RG_TV_A, x isa RG_TV_B))
 # one type; other shapes, a variable in a parameter, the closed world's error)
 rg_vt_typevar_unknown(n::Int) = (x = rg_id(Any[tuple(collect(1:n)...)])[1]; (x isa RG_TV_A) + 2 * (x isa RG_TV_B))
 rg_vt_typevar_mixed(n::Int) = (x = rg_id(Any[tuple(Any[1, 2.5, "s"][1:n]...)])[1]; (x isa RG_TV_A) + 2 * (x isa RG_TV_B))
+# (a `Vararg` whose length is a variable of no other part, `NTuple`'s: of any length; and a
+# vector literal of an abstract element type, `getindex(::Type{T}, vals...)`, which tests
+# `vals isa NTuple`)
+const RG_TV_NT = Tuple{T,Vararg{T,N}} where {N,T}
+const RG_TV_NTI = NTuple{N,Int} where N
+rg_vt_ntuple(n::Int) = (x = rg_id(Any[tuple(Any[1, 2, 2.5, "s"][1:n]...)])[1];
+                        (x isa NTuple) + 2 * (x isa RG_TV_NTI) + 4 * (x isa RG_TV_NT))
+abstract type RGShape end
+struct RGCircle <: RGShape; r::Float64; end
+struct RGSquare <: RGShape; s::Float64; end
+const RG_SHAPES = RGShape[RGCircle(1.0), RGSquare(2.0)]
+rg_vect_abstract(i::Int, j::Int) = (v = RGShape[RG_SHAPES[i], RG_SHAPES[j]];
+                                    (length(v), v[1] === RG_SHAPES[i], v[2] === RG_SHAPES[j]))
 const RG_TV_NESTED = Tuple{Vector{T}, Vararg{Any}} where T
 struct RGTvItem; n::Int; end
 rg_vt_typevar_nested(n::Int) = (x = rg_id(Any[tuple(Any[[n], RGTvItem(n)][1:n]...)])[1]; x isa RG_TV_NESTED)
@@ -453,6 +466,10 @@ end
     for n in 0:3
         @wtest rg_vt_typevar_mixed(n)
     end
+    for n in 0:4
+        @wtest rg_vt_ntuple(n)
+    end
+    @wtest rg_vect_abstract(1, 2); @wtest rg_vect_abstract(2, 2)
     @test rg_vt_typevar_nested(2)
     let r = wasm_run(wcompile(rg_vt_typevar_nested, (Int,)), "rg_vt_typevar_nested", 2; rettype=Bool)
         @test r isa Tuple && r[1] === :trap
@@ -544,12 +561,15 @@ rb_sub_c2(i::Int) = try Core.:(<:)(Int, 1) ? 1 : 0 catch e; rb_err(e) end
 # a float of a primitive type that is not Wasm's
 rb_bfloat(a::UInt16, b::UInt16) = reinterpret(UInt16, Base.add_float(reinterpret(Core.BFloat16, a), reinterpret(Core.BFloat16, b)))
 
-# `muladd` of Float16s rounds the product, as natively (where it is not fused)
+# `muladd` of Float16s rounds the product, as natively where it is not fused
 rb_muladd16(a::Float16, b::Float16, c::Float16) = muladd(a, b, c)
 
 @testset "builtins on arguments they reject, unset elements, sizes" begin
-    @wtest rb_muladd16(Float16(3.3), Float16(0.7), Float16(-1.1))
-    @wtest rb_muladd16(Float16(1.1), Float16(1.3), Float16(0.4))
+    # (against the product and the sum, not the host's `muladd`: a host of half-precision
+    # arithmetic, AVX512-FP16, fuses it)
+    for (a, b, c) in (Float16.((3.3, 0.7, -1.1)), Float16.((1.1, 1.3, 0.4)))
+        @test wasm_run(wcompile(rb_muladd16, (Float16, Float16, Float16)), "rb_muladd16", a, b, c; rettype = Float16) === a * b + c
+    end
     # `<:` of a value that is not a type: a TypeError
     for i in 1:4; @wtest rb_sub(i); end
     for i in (1, 3, 4); @wtest rb_sub_r(i); end

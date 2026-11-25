@@ -75,7 +75,7 @@
     <div class="eyebrow">Julia → WebAssembly GC · no Julia runtime</div>
     <h1>Julia packages, running in your browser</h1>
     <p class="lede">Each page is a Julia program compiled ahead of time by
-      <a href="https://github.com/gbaraldi/WasmCodegen.jl">WasmCodegen.jl</a> to WebAssembly GC:
+      <a href="https://github.com/JuliaWASM/WasmCodegen.jl">WasmCodegen.jl</a> to WebAssembly GC:
       the packages' own code, unchanged, in a module embedded in the page. Nothing runs on a
       server.</p>
   </header>
@@ -87,7 +87,7 @@
       <p>Type the weights of a convolution kernel, or pick one, and filter a picture of your
         own with the package's padding, separability test and color arithmetic.</p>
       <pre class="call">imfilter(img, kernel, <span class="l">"reflect"</span>)</pre>
-      <div class="links"><a href="images.html">Open the page</a><a href="https://github.com/gbaraldi/WasmCodegen.jl/tree/main/examples/images">Source</a></div>
+      <div class="links"><a href="images.html">Open the page</a><a href="https://github.com/JuliaWASM/WasmCodegen.jl/tree/main/examples/images">Source</a></div>
     </article>
 
     <article class="example">
@@ -96,7 +96,7 @@
       <p>Edit Julia source and see it lexed and parsed into JuliaSyntax's green tree as you
         type, syntax errors and their recovery included.</p>
       <pre class="call">JuliaSyntax.parse!(stream)</pre>
-      <div class="links"><a href="juliasyntax.html">Open the page</a><a href="https://github.com/gbaraldi/WasmCodegen.jl/tree/main/examples/juliasyntax">Source</a></div>
+      <div class="links"><a href="juliasyntax.html">Open the page</a><a href="https://github.com/JuliaWASM/WasmCodegen.jl/tree/main/examples/juliasyntax">Source</a></div>
     </article>
 
     <article class="example">
@@ -105,7 +105,7 @@
       <p>Move σ, ρ, β and x₀ and the system is solved again over <em>t</em> ∈ [0, 40], by an
         integrator built in Julia ahead of time and serialized into the module.</p>
       <pre class="call">init(prob, Tsit5(); saveat = <span class="l">0.01</span>)</pre>
-      <div class="links"><a href="lorenz.html">Open the page</a><a href="https://github.com/gbaraldi/WasmCodegen.jl/tree/main/examples/lorenz">Source</a></div>
+      <div class="links"><a href="lorenz.html">Open the page</a><a href="https://github.com/JuliaWASM/WasmCodegen.jl/tree/main/examples/lorenz">Source</a></div>
     </article>
 
     <article class="example">
@@ -114,7 +114,7 @@
       <p>A driven, damped oscillator, simplified by ModelingToolkit when the module was built;
         its energy is read back through the model's own observed function.</p>
       <pre class="call">mtkcompile(oscillator)</pre>
-      <div class="links"><a href="mtk.html">Open the page</a><a href="https://github.com/gbaraldi/WasmCodegen.jl/tree/main/examples/mtk">Source</a></div>
+      <div class="links"><a href="mtk.html">Open the page</a><a href="https://github.com/JuliaWASM/WasmCodegen.jl/tree/main/examples/mtk">Source</a></div>
     </article>
 
     <article class="example">
@@ -123,13 +123,13 @@
       <p>A stiff reaction–diffusion system on 32 points. Pick which of LinearSolve's pure-Julia
         solvers factorizes W = I/(γ·dt) − J at each step.</p>
       <pre class="call">Rodas5P(linsolve = KrylovJL_GMRES())</pre>
-      <div class="links"><a href="brusselator.html">Open the page</a><a href="https://github.com/gbaraldi/WasmCodegen.jl/tree/main/examples/brusselator">Source</a></div>
+      <div class="links"><a href="brusselator.html">Open the page</a><a href="https://github.com/JuliaWASM/WasmCodegen.jl/tree/main/examples/brusselator">Source</a></div>
     </article>
   </main>
 
   <footer class="note">
     <p>Built by GitHub Actions from
-      <a href="https://github.com/gbaraldi/WasmCodegen.jl/commit/__COMMIT__"><code>__SHORT__</code></a>:
+      <a href="https://github.com/JuliaWASM/WasmCodegen.jl/commit/__COMMIT__"><code>__SHORT__</code></a>:
       each example is compiled as its README says and run in Node.js, and the pages are
       published only when every example passes.</p>
     <p>The pages need WebAssembly GC and exception handling with <code>exnref</code>. They have

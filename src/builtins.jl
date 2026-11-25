@@ -162,6 +162,26 @@ function field_index_error!(fc::FnCtx, name::Symbol, i::CGVal)
 end
 
 """
+    checked_value!(fc, name, T, v) -> CGVal
+
+The value `v` as one of type `T`; one of another type the TypeError of the builtin `name`
+(and no value), checked at run time where `v`'s type does not tell.
+"""
+function checked_value!(fc::FnCtx, name::Symbol, @nospecialize(T), v::CGVal)
+    type_error() = throw_error!(fc, Runtime.throw_builtin_type_error, const_value(fc, name),
+                                () -> convert_repr(fc, const_value(fc, T), Any), () -> convert_repr(fc, v, Any))
+    t = emit_isa!(fc, v, T)
+    if isconstant(t)
+        constant_value(t) || return type_error()
+    else
+        push_val!(fc, t)
+        emit!(fc.b, :i32_eqz)
+        if!(fc.b); type_error(); end!(fc.b)
+    end
+    return v.typ <: T ? v : convert_repr(fc, v, typeintersect(v.typ, T))
+end
+
+"""
 Whether a field of a value of type `T` is found by the value's type at run time: `T` is not
 concrete and has no layout of fields of its own (abstract, a `Union`, a `UnionAll`, a tuple of
 an element type not concrete, as `Tuple{Type, String}`; inline tuples, tuples of unknown length
@@ -337,6 +357,45 @@ function set_field!(fc::FnCtx, x::CGVal, i::Int, v::CGVal)
     return v
 end
 
+"""
+    store_order!(fc, args) -> CGVal
+
+Whether the ordering of the `setfield!` of `args` (its fourth, else not atomic) is atomic, a
+Bool; one that is no ordering of a store a ConcurrencyViolationError (and no value).
+"""
+function store_order!(fc::FnCtx, args::Vector{Any})
+    length(args) == 3 && return const_value(fc, false)
+    order = checked_value!(fc, :setfield!, Symbol, args[4]::CGVal)
+    order.kind === Bottom && return order
+    isconstant(order) || return call_runtime!(fc, Runtime.checked_store_order, CGVal[order])
+    atomic = Runtime.store_order(constant_value(order))
+    atomic === nothing &&
+        return throw_error!(fc, Runtime.throw_concurrency_error, () -> const_value(fc, "invalid atomic ordering"))
+    return const_value(fc, atomic)
+end
+
+"""
+    store_order_error!(fc, T, k, atomic) -> Bool
+
+The ConcurrencyViolationError of a store to the field `k` of `T` by an ordering whose
+atomicity (`atomic`, a Bool) is not the field's; whether it is thrown always.
+"""
+function store_order_error!(fc::FnCtx, @nospecialize(T), k::Int, atomic::CGVal)
+    field_atomic = Base.isfieldatomic(T, k)
+    err() = throw_error!(fc, Runtime.throw_concurrency_error,
+                         () -> const_value(fc, field_atomic ? "setfield!: atomic field cannot be written non-atomically" :
+                                                              "setfield!: non-atomic field cannot be written atomically"))
+    if isconstant(atomic)
+        constant_value(atomic) == field_atomic && return false
+        err()
+        return true
+    end
+    push_val!(fc, atomic)
+    field_atomic && emit!(fc.b, :i32_eqz)
+    if!(fc.b); err(); end!(fc.b)
+    return false
+end
+
 ## builtins
 
 """
@@ -390,29 +449,47 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         end
         return get_field_dynamic(fc, x, idx, typ)
     elseif f === Core.setfield!
+        3 <= length(args) <= 4 ||
+            return throw_error!(fc, Runtime.throw_argument_error,
+                                () -> const_value(fc, length(args) < 3 ? "setfield!: too few arguments (expected 3)" :
+                                                                         "setfield!: too many arguments (expected 4)"))
         x, idx, v = args[1], args[2], args[3]
         T = x.typ
-        # (the errors of the C runtime, in its order: an immutable value, the index, a const field;
-        # an ordering is checked before them)
-        ordered() = length(args) == 3 || unsupported("setfield! with an ordering, of a value of type ", T)
-        T === Module && ordered() &&
+        # (the errors of the C runtime, in its order: the ordering, an immutable value, the index,
+        # a const field, an ordering that is not the field's, the value's type)
+        atomic = store_order!(fc, args)
+        atomic.kind === Bottom && return atomic
+        T === Module &&
             return throw_error!(fc, Runtime.throw_error_message, const_value(fc, "cannot assign variables in other modules"))
-        T isa DataType && isconcretetype(T) && !ismutabletype(T) && ordered() &&
-            return throw_error!(fc, Runtime.throw_error_message,
-                                const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
-        # (of a value whose type is not known, natively the errors above may come first)
-        if bad_field_index(idx.typ)
-            (T isa DataType && isconcretetype(T) && ordered()) ||
-                unsupported("setfield! with a field of type ", idx.typ, " of a value of type ", T)
-            return field_index_error!(fc, :setfield!, idx)
+        if !(T isa DataType && isconcretetype(T))
+            # (of a value whose type is not known, natively the errors above may come first)
+            bad_field_index(idx.typ) && unsupported("setfield! with a field of type ", idx.typ, " of a value of type ", T)
+            isconstant(idx) || return set_field_dynamic!(fc, x, idx, v, atomic)
+            return set_field!(fc, x, field_index(T, constant_value(idx)), v)
         end
-        isconstant(idx) || unsupported("setfield! with a field not known at compile time")
-        is_no_field(T, constant_value(idx)) && return no_field!(fc, T, constant_value(idx))
-        i = field_index(T, constant_value(idx))
-        T isa DataType && isconcretetype(T) && isconst(T, i) && ordered() &&
-            return throw_error!(fc, Runtime.throw_error_message,
-                                const_value(fc, string("setfield!: const field .", fieldname(T, i), " of type ", T.name.name, " cannot be changed")))
-        return set_field!(fc, x, i, v)
+        immutable() = throw_error!(fc, Runtime.throw_error_message,
+                                   const_value(fc, string("setfield!: immutable struct of type ", T.name.name, " cannot be changed")))
+        k = isconstant(idx) ? known_field(T, constant_value(idx)) : nothing
+        if k !== nothing && isconstant(atomic)
+            # (a field and an ordering Julia knows: the code it compiles checks the value's type,
+            # then the ordering, then whether the field may be changed)
+            v = checked_value!(fc, :setfield!, fieldtype(T, k), v)
+            v.kind === Bottom && return v
+            store_order_error!(fc, T, k, atomic) && return bottom()
+            ismutabletype(T) || return immutable()
+            isconst(T, k) && return const_field_error!(fc, T, k)
+            return set_field!(fc, x, k, v)
+        end
+        ismutabletype(T) || return immutable()
+        bad_field_index(idx.typ) && return field_index_error!(fc, :setfield!, idx)
+        isconstant(idx) || return set_field_dynamic!(fc, x, idx, v, atomic)
+        if k === nothing
+            # (an index or a name known not to be a field's: its error, at run time)
+            c = constant_value(idx)
+            c isa Symbol && return no_field!(fc, T, c)
+            return throw_error!(fc, Runtime.throw_bounds_error, () -> convert_repr(fc, x, Any), idx)
+        end
+        return checked_set_field!(fc, x, k, v, atomic)
     elseif f === Core.swapfield! || f === Core.modifyfield! || f === Core.replacefield! ||
            (isdefined(Core, :setfieldonce!) && f === Core.setfieldonce!)
         return emit_atomic_field!(fc, f, args, typ)
@@ -656,17 +733,33 @@ end
 """
     get_field_dynamic(fc, x, i, typ) -> CGVal
 
-The field of `x` at the run-time index or name `i` (1-based; out of bounds traps, as a
-BoundsError or FieldError would): an element of the array of a large tuple; for an inline
+The field of `x` at the run-time index or name `i` (1-based; out of bounds a BoundsError, no
+field's name a FieldError, neither an Int nor a Symbol the TypeError of the builtin): an element of the array of a large tuple; for an inline
 tuple of one element type, an element of a temporary array of its elements; otherwise a
 chain of tests of the index (of a tuple of a known number of fields, found by its type at
 run time, `getfield_by_type`: each that field so).
 """
 function get_field_dynamic(fc::FnCtx, x::CGVal, i::CGVal, @nospecialize(typ))
     T = x.typ
+    T === Module && unsupported("getfield of a module with a name not known at compile time")
+    if i.typ !== Int && i.typ !== Symbol
+        res = new_val!(fc, typ)
+        for_index_type!(fc, i, :getfield) do ik
+            r = get_field_dynamic(fc, x, ik, typ)
+            r.kind === Bottom || assign!(fc, res, r)
+        end
+        return res
+    end
     l = layout(fc, T)
-    l.kind === Boxed && l.elements !== nothing && i.typ !== Symbol &&
-        return tuple_array_get!(fc, x, i)
+    # (a SimpleVector's elements are no fields of it)
+    T === Core.SimpleVector && i.typ === Int &&
+        return throw_error!(fc, Runtime.throw_bounds_error, () -> convert_repr(fc, x, Any), i)
+    if l.kind === Boxed && l.elements !== nothing
+        i.typ === Symbol || return tuple_array_get!(fc, x, i)
+        # (no field of a tuple, or of a SimpleVector, has a name)
+        isconcretetype(T) &&
+            return throw_error!(fc, Runtime.throw_field_error, () -> convert_repr(fc, const_value(fc, T), Any), i)
+    end
     # (an index of another type, natively a TypeError or by the value's type, is not)
     nby = getfield_by_type(T) && T <: Tuple && i.typ === Int ? definite_fieldcount(T) : nothing
     if nby !== nothing
@@ -695,6 +788,53 @@ function get_field_dynamic(fc::FnCtx, x::CGVal, i::CGVal, @nospecialize(typ))
     return res
 end
 
+"""
+    set_field_dynamic!(fc, x, i, v, atomic) -> CGVal
+
+`setfield!(x, i, v)` of the run-time index or name `i` (checked as by `get_field_dynamic`): a
+chain of tests of the index, each field the store of `checked_set_field!`.
+"""
+function set_field_dynamic!(fc::FnCtx, x::CGVal, i::CGVal, v::CGVal, atomic::CGVal)
+    T = x.typ
+    (T isa DataType && isconcretetype(T) && ismutabletype(T)) ||
+        unsupported("setfield! of a value of type ", T, " with a field not known at compile time")
+    if i.typ !== Int && i.typ !== Symbol
+        for_index_type!(ik -> set_field_dynamic!(fc, x, ik, v, atomic), fc, i, :setfield!)
+        return v
+    end
+    idx = checked_field_index!(fc, x, i)
+    for_field_at!(k -> checked_set_field!(fc, x, k, v, atomic), fc, idx, fieldcount(T))
+    return v
+end
+
+"""
+    checked_set_field!(fc, x, k, v, atomic) -> CGVal
+
+The store of `v` to the field `k` of `x`, with the errors of the builtin in its order: a
+const field, an ordering (`atomic`, see `store_order!`) that is not the field's, a value the
+field's type does not admit (checked at run time where `v`'s type does not tell).
+"""
+function checked_set_field!(fc::FnCtx, x::CGVal, k::Int, v::CGVal, atomic::CGVal)
+    T = x.typ
+    isconst(T, k) && return const_field_error!(fc, T, k)
+    store_order_error!(fc, T, k, atomic) && return bottom()
+    vk = checked_value!(fc, :setfield!, fieldtype(T, k), v)
+    vk.kind === Bottom && return vk
+    set_field!(fc, x, k, vk)
+    return v
+end
+
+const_field_error!(fc::FnCtx, @nospecialize(T), k::Int) =
+    throw_error!(fc, Runtime.throw_error_message,
+                 () -> const_value(fc, string("setfield!: const field .", fieldname(T, k), " of type ", T.name.name, " cannot be changed")))
+
+# the index of the field of the concrete type `T` that the constant `f` (an index or a name)
+# is; nothing if it is none
+function known_field(@nospecialize(T), @nospecialize(f))
+    k = f isa Symbol ? Base.fieldindex(T, f, false) : f isa Int ? f : 0
+    return 1 <= k <= fieldcount(T) ? k : nothing
+end
+
 # the number of fields of every value of the tuple type `T` (of parameters or not), if it is
 # known at compile time: not of a tuple of unknown length, nor of a union (its members may
 # differ, and `fieldcount` has the first's)
@@ -703,8 +843,8 @@ function definite_fieldcount(@nospecialize(T))
     return U isa DataType && !Base.isvatuple(U) ? length(U.parameters) : nothing
 end
 
-# the index (an Int) of the field of `x` at the run-time index or name `i`, checked: out of
-# bounds a BoundsError, a name that is not a field's a FieldError
+# the index (an Int) of the field of `x` at the run-time index (an Int) or name `i`, checked:
+# out of bounds a BoundsError, a name that is not a field's a FieldError
 function checked_field_index!(fc::FnCtx, x::CGVal, i::CGVal)
     T = x.typ
     if i.typ === Symbol
@@ -718,6 +858,22 @@ function checked_field_index!(fc::FnCtx, x::CGVal, i::CGVal)
     emit!(fc.b, :i64_const, fieldcount(T)); emit!(fc.b, :i64_ge_u)
     if!(fc.b); throw_error!(fc, Runtime.throw_bounds_error, () -> convert_repr(fc, x, Any), idx); end!(fc.b)
     return idx
+end
+
+# emit `f(i)` for the index or name `i`, of a type known only at run time, as the Int and as
+# the Symbol it may be; one that is neither the TypeError of the builtin `name`
+function for_index_type!(f, fc::FnCtx, i::CGVal, name::Symbol)
+    cases = Any[I for I in (Int, Symbol) if typeintersect(i.typ, I) !== Union{}]
+    for I in cases
+        push_val!(fc, emit_isa!(fc, i, I))
+        if!(fc.b); open_label!(fc)
+        f(convert_repr(fc, i, I))
+        else!(fc.b)
+    end
+    field_index_error!(fc, name, i)
+    for _ in cases
+        end!(fc.b); close_label!(fc)
+    end
 end
 
 # emit `f(k)` for the field `k` (of `n`) that the checked index `idx` is: a chain of ifs on
@@ -1272,7 +1428,9 @@ end
 The parts of a tuple type with type variables of the common shape, whose `isa` the types of a
 tuple's elements decide (`diagonal_vars_isa!`): `Tuple{P1, …, Pk[, Vararg{Pv}]} where V1, …, Vm`,
 each parameter a variable or of none of them, each variable's bounds types of none (no variable,
-of these or free) and ordered (`lb <: ub`), a `Vararg` of no variable length. Else `nothing`.
+of these or free) and ordered (`lb <: ub`), a `Vararg` of no length or of a length that is an
+unbounded variable of no other part (`NTuple`'s `N`: any length, and not one of `vars`). Else
+`nothing`.
 """
 function bound_tuple_shape(@nospecialize(T))
     vars = TypeVar[]
@@ -1281,15 +1439,21 @@ function bound_tuple_shape(@nospecialize(T))
         push!(vars, W.var); W = W.body
     end
     (W isa DataType && W.name === Tuple.name) || return nothing
-    any(v -> any(w -> Base.has_typevar(v.lb, w) || Base.has_typevar(v.ub, w), vars), vars) && return nothing
-    all(v -> v.lb isa Type && v.ub isa Type && v.lb <: v.ub, vars) || return nothing
     ps = collect(Any, W.parameters)
     va = !isempty(ps) && ps[end] isa Core.TypeofVararg
     if va
         V = ps[end]
-        isdefined(V, :N) && return nothing
         ps[end] = isdefined(V, :T) ? V.T : Any
+        if isdefined(V, :N)
+            N = V.N
+            (N isa TypeVar && N.lb === Union{} && N.ub === Any && any(v -> v === N, vars)) || return nothing
+            filter!(v -> v !== N, vars)
+            any(P -> Base.has_typevar(P, N), ps) && return nothing
+            any(v -> Base.has_typevar(v.lb, N) || Base.has_typevar(v.ub, N), vars) && return nothing
+        end
     end
+    any(v -> any(w -> Base.has_typevar(v.lb, w) || Base.has_typevar(v.ub, w), vars), vars) && return nothing
+    all(v -> v.lb isa Type && v.ub isa Type && v.lb <: v.ub, vars) || return nothing
     for P in ps
         P isa TypeVar && any(v -> v === P, vars) && continue
         any(v -> Base.has_typevar(P, v), vars) && return nothing

@@ -27,7 +27,7 @@ const P = TasksProgram
            P.pingpong_channel => (Int32,), P.shared_handle => (), P.early_return => (),
            P.deadlock_child => (), P.deadlock_root => (), P.deadlock_exit => (), P.child_trap => (Int32,),
            P.root_trap => (Int32,), P.stress => (Int32, Int32), P.task_stats => (),
-           P.discarded => (Int32,), P.sleep_then_print => ()]
+           P.discarded => (Int32,), P.sleep_then_print => (), P.external_wait => (Int32, Int32)]
     c = WasmCodegen.compile([Entry(f, T; name=string(nameof(f))) for (f, T) in fns];
                             config=WasmCodegen.Config(host=:wasi, host_extensions=[:julia_io], tasks=:jspi,
                                                       verify=:error))
@@ -51,7 +51,8 @@ const P = TasksProgram
              Dict("fn" => "discarded", "args" => [70000]),
              Dict("fn" => "pingpong_busy", "args" => [10_000_000], "shutdownAfter" => 20, "expectTrap" => true),
              Dict("fn" => "sleep_then_print", "shutdownAfter" => 20, "settleAfter" => 300, "expectTrap" => true),
-             Dict("fn" => "main_safe", "jsHost" => true)]
+             Dict("fn" => "main_safe", "jsHost" => true),
+             Dict("fn" => "external_wait", "external" => true)]
     out = IOBuffer(); err = IOBuffer()
     cmd = `$(node_cmd()) --disable-warning=ExperimentalWarning $(jspi_flags()) $(joinpath(@__DIR__, "tasks.mjs")) $wasm $(JSON.json(calls))`
     proc = run(pipeline(ignorestatus(cmd); stdout=out, stderr=err))
@@ -110,6 +111,18 @@ const P = TasksProgram
     # `main` on js/julia.mjs's WASI (hosts without one): the same stdout as natively
     @test res(20) == 0 && rs[20]["open"] == 0
     @test endswith(stdout_wasm, native)
+    # a wait for an external handle of the embedder, made ready when the other task closes a
+    # second one in its 20th turn: that task ran meanwhile, the module closed both handles
+    @test num(21) >= 20 && rs[21]["externalClosed"] === true && rs[21]["open"] == 0
+end
+
+@testset "julia_io's external handles (js/julia_io.mjs)" begin
+    out = read(`$(node_cmd()) --disable-warning=ExperimentalWarning $(jspi_flags()) $(joinpath(@__DIR__, "julia_io_external.mjs"))`, String)
+    ls = split(chomp(out), '\n')
+    @test length(ls) == 14
+    for l in ls
+        @test endswith(l, ": true")
+    end
 end
 
 @testset "Config(tasks)" begin
