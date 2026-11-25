@@ -787,6 +787,27 @@ function shared_handle()::Int32
     return Int32(0)
 end
 
+# a wait for a handle the embedder makes ready (julia_io's external handles: `h`, ready when
+# `signal` is closed): only this task waits, the other one runs meanwhile, and closes `signal`
+# in its 20th turn; the count of its turns
+function external_wait(h::Int32, signal::Int32)::Int64
+    n = Ref(0)
+    done = Ref(false)
+    t = @async while !done[]
+        n[] += 1
+        n[] == 20 && H.close(signal)
+        yield()
+    end
+    try
+        H.await_handle(h)
+    finally
+        done[] = true
+        H.close(h)
+    end
+    wait(t)
+    return n[]
+end
+
 # returns while a task waits forever: the host keeps it parked (the next root call may run)
 function early_return()::Int32
     c = Condition()
