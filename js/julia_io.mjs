@@ -68,6 +68,14 @@
 //
 // **Readiness** is level-triggered: a timer is ready from when it fires (or is cancelled)
 // until it is closed. Callers close every handle (in `finally` blocks).
+//
+// **External handles** (the embedder's, not imports): a host library that starts work for the
+// module without suspending it (an HTTP request) hands the module `h = events.external({ onClose })`,
+// pending; `events.ready(h, message?)` makes it ready once the work is done (and wakes a
+// suspended `poll`), `false` if the module has closed it or the instance is stopped. The module
+// waits for it as for a timer (`Runtime.Host.await_handle`: with `tasks = :jspi`, a wait of its
+// task alone). Its `close(h)`, and `stop()` for those still open, release it and call
+// `onClose(h)`. The result is the library's business.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -104,12 +112,19 @@ export class GuestError extends Error {
 }
 
 function describe(e) {
-  if (!(e instanceof Error)) return String(e);
-  let m = e.message;
-  const c = e.cause;
-  if (c) m += ': ' + (c.code ? c.code + ' ' : '') + (c.message || String(c));
-  else if (e.code && !m.includes(e.code)) m = e.code + ' ' + m;
-  return m;
+  // (a value without a string, as an object of no prototype, has no message; neither has a
+  // cause of one, which leaves the message of the error it is the cause of)
+  const text = (f) => { try { return String(f()); } catch { return undefined; } };
+  const error = text(() => e instanceof Error); // (may throw, of a proxy)
+  if (error !== 'true') return (error && text(() => e)) ?? 'an exception without a message';
+  let m = text(() => e.message) ?? 'an exception without a message';
+  const c = text(() => {
+    const c = e.cause;
+    return c ? ': ' + (c.code ? c.code + ' ' : '') + (c.message || String(c)) : '';
+  }) ?? '';
+  if (c) return m + c;
+  const code = text(() => e.code || '');
+  return code && !m.includes(code) ? code + ' ' + m : m;
 }
 
 export function errnoOf(e) {
@@ -375,6 +390,32 @@ export function makeJuliaIOEvents(opts = {}) {
   }
   const isPending = (x) => !x.fired;
 
+  // ---- external handles (the embedder's) ----
+  function external({ onClose } = {}) {
+    if (stopped) throw new JuliaIOAssertion('external called after stop()');
+    // (its `deadline` is when it became ready, for poll's order)
+    return newHandle({ kind: 'external', fired: false, cancelled: false, t: null, starting: false,
+                       deadline: Infinity, errmsg: '', closed: false, onClose });
+  }
+  function ready(h, message) {
+    const x = get(h);
+    if (!x || x.kind !== 'external') return false;
+    if (x.fired) return true; // (ready once: a later message is not looked at)
+    const m = message ? String(message) : ''; // (may throw: before the handle changes)
+    // (the conversion ran the embedder's code, which may have closed the handle, or readied it)
+    if (get(h) !== x) return false;
+    if (!x.fired) { x.fired = true; x.deadline = performance.now(); x.errmsg = m; notify(); }
+    return true;
+  }
+  // (the embedder's callback: its exception, or the rejection of an async one, is not the
+  // module's, and does not keep `stop` from closing the other handles)
+  function closed(x) {
+    if (x.kind !== 'external' || typeof x.onClose !== 'function') return;
+    const failed = (e) => { lastError = describe(e); };
+    // (awaited, for a thenable of any kind)
+    (async () => { try { await x.onClose(x.id); } catch (e) { failed(e); } })();
+  }
+
   // ---- timers ----
   function timer_start(ns) {
     ns = BigInt.asIntN(64, BigInt(ns));
@@ -475,6 +516,8 @@ export function makeJuliaIOEvents(opts = {}) {
       }
       for (;;) {
         await new Promise((r) => { waker = r; });
+        // (stopped since it was woken, in the same turn: its stack does not resume)
+        if (stopped) await new Promise(() => {});
         waker = null;
         const ready = readyOf(interest, cap);
         // (a starting timer that is due is armed, and wakes the poll, within a turn)
@@ -512,7 +555,7 @@ export function makeJuliaIOEvents(opts = {}) {
     const x = get(h);
     if (!x) return -E.BADF;
     if (!x.fired) {
-      disarm(x); x.fired = true; x.cancelled = true; x.errmsg = 'timer cancelled';
+      disarm(x); x.fired = true; x.cancelled = true; x.errmsg = x.kind === 'timer' ? 'timer cancelled' : 'cancelled';
       x.deadline = Math.min(x.deadline, performance.now());
       notify();
     }
@@ -527,6 +570,7 @@ export function makeJuliaIOEvents(opts = {}) {
     x.closed = true;
     handles.delete(h);
     notify();
+    closed(x);
     return 0;
   }
 
@@ -541,21 +585,27 @@ export function makeJuliaIOEvents(opts = {}) {
   return {
     imports,
     bindMemory,
+    external,
+    ready,
     // introspection, for tests and diagnostics
     stats() { return { open: handles.size, ...stats }; },
     handleState(h) {
       const x = get(h);
       if (!x) return null;
-      return { kind: 'timer', fired: x.fired, cancelled: x.cancelled, ready: isReady(x) };
+      return { kind: x.kind, fired: x.fired, cancelled: x.cancelled, ready: isReady(x) };
     },
     // The instance is done (it trapped, or its embedder shut it down: `julia_task.mjs` calls
     // this): a suspended `poll` never resumes its stack, the timers are released, and later
-    // calls are errors.
+    // calls are errors. (A `poll` that has returned to the module already, its stack resumed
+    // by the host in a later microtask, runs the module until its next call.)
     stop() {
       stopped = true;
       waker = null;
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-      for (const x of handles.values()) disarm(x);
+      // (released before their `onClose`, as `close` does: `ready` of them is `false` there)
+      const xs = [...handles.values()];
+      handles.clear();
+      for (const x of xs) { disarm(x); if (!x.closed) { x.closed = true; closed(x); } }
       if (turn !== null) { clearImmediate(turn); turn = null; }
       starting.length = 0;
     },
