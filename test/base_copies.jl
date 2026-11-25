@@ -32,7 +32,8 @@ function checksum(@nospecialize(f), @nospecialize(types))
     m = base_method(f, types)
     text = lowered_text(m)
     body = Base.bodyfunction(m)
-    if body !== nothing
+    # (a method that ends in a type assertion: `bodyfunction` takes `typeassert` for its body)
+    if body !== nothing && !(body isa Core.Builtin)
         for bm in methods(body)
             text *= lowered_text(bm)
         end
@@ -55,14 +56,15 @@ const COPIES = Any[
     ("src/runtime/tasks.jl timer_close!", Base.close, (Timer,)),
     ("src/runtime/tasks.jl errormonitor_wasm", Base.errormonitor, (Task,)),
     ("src/runtime/env.jl iterate(::EnvDict)", Base.iterate, (Base.EnvDict, Int)),
+    ("src/trim/wasm-base.jl convert(::Type{<:Tuple}, ::Tuple)", Base.convert, (Type{Tuple{Int}}, Tuple{Float64})),
 ]
 
 # the checksums of `COPIES`, in its order, by Julia version (the latest patch releases)
 const CHECKSUMS = Dict(
     (1, 12) => (0x00e45643, 0x60af36c9, 0x8627a189, 0x1995651c, 0x3b1d0b61, 0x606856fc, 0x982c254e,
-                0x338454c7, 0x488c475d, 0x00419470, 0x4843143d, 0x71434f54),
+                0x338454c7, 0x488c475d, 0x00419470, 0x4843143d, 0x71434f54, 0x9db4e105),
     (1, 13) => (0x19a9fbe9, 0x354b69f0, 0xef8c5bf5, 0x0f2bfaf0, 0x3b1d0b61, 0xb122e146, 0x1a0e57ba,
-                0x338454c7, 0x488c475d, 0xa986f9ab, 0x4843143d, 0xdef0a905),
+                0x338454c7, 0x488c475d, 0xa986f9ab, 0x4843143d, 0xdef0a905, 0x9db4e105),
 )
 
 end # module

@@ -50,6 +50,45 @@ function vn_maxmethods1(i::Int)
     return (MaxMethods1.same(v, VS[i]), p === (), length(p), v.build === (), MaxMethods1.npre(v))
 end
 
+# converting a tuple of unknown length to a tuple type of a fixed length (as ComputePipeline's
+# flags of changes, of more than 10 fields): its length checked, without `typeintersect`; a
+# length not the type's a MethodError, as natively
+const BS = Bool[isodd(k) || k % 3 == 0 for k in 1:16]
+const IS = [1, 2, 3, 4]
+const V = Bool[true, false, true]
+bits(t::Tuple) = (s = 0; for b in t; s = 2s + b; end; s)
+cvt_mwe() = (t = convert(NTuple{3,Bool}, (V...,)); t[1] + 2 * t[2] + 4 * t[3])
+cvt_bool3(n::Int) = try bits(convert(NTuple{3,Bool}, (BS[1:n]...,))) catch e; e isa MethodError ? -1 : -2 end
+cvt_bool13(n::Int) = try bits(convert(NTuple{13,Bool}, (BS[1:n]...,))) catch e; e isa MethodError ? -1 : -2 end
+# (the MethodError's function and arguments, as Base's `_tuple_error` makes them)
+function cvt_error(n::Int)
+    t = (BS[1:n]...,)
+    try
+        convert(NTuple{3,Bool}, t)
+        return 0
+    catch e
+        return e isa MethodError && e.f === convert && (a = e.args; a isa Tuple{Any,Tuple} && a[1] === NTuple{3,Bool} && a[2] === t) ? 1 : 2
+    end
+end
+cvt_float(n::Int) = try (t = convert(NTuple{3,Float64}, (IS[1:n]...,)); t[1] + t[2] / 4 + t[3] / 16)
+                    catch e; e isa MethodError ? -1.0 : -2.0 end
+cvt_mixed(n::Int) = try (t = convert(Tuple{Float64,Int,Float64}, (IS[1:n]...,)); t[1] + t[2] / 4 + t[3] / 16)
+                    catch e; e isa MethodError ? -1.0 : -2.0 end
+# (target types of a fixed length that are UnionAlls, `NTuple{3}`, `Tuple{T,Int} where T` and
+# `NTuple{2,T} where T<:Integer`: a field of a type variable its bound, as `fieldtype` of the UnionAll
+# gives, i.e. as natively; constants, as a `where` in a function's code makes the type at run time)
+const FS = [1.5, 2.0, 3.0, 4.5]
+const TINT = Tuple{T,Int} where T
+const NTINT = NTuple{2,T} where T<:Integer
+# (a `Vararg` of a known length that the UnionAll keeps)
+const TVAR = Tuple{Float64,Vararg{T,2}} where T
+cvt_tvar(n::Int) = try (t = convert(TVAR, (IS[1:n]...,)); t[1] + t[2]::Int / 4 + t[3]::Int / 16)
+                   catch e; e isa MethodError ? -1.0 : -2.0 end
+cvt_ntuple3(n::Int) = try bits(convert(NTuple{3}, (BS[1:n]...,))) catch e; e isa MethodError ? -1 : -2 end
+cvt_tint(i::Int, n::Int) = try (t = convert(TINT, (FS[i:i+n-1]...,)); t[1] + 10 * t[2])
+                           catch e; e isa MethodError ? -1.0 : e isa InexactError ? -3.0 : -2.0 end
+cvt_ntint(i::Int, n::Int) = try (t = convert(NTINT, (FS[i:i+n-1]...,)); t[1] + 10 * t[2])
+                            catch e; e isa MethodError ? -1 : e isa InexactError ? -3 : -2 end
 # tuples of singletons of a run-time length (ntuple's ladder: up to 10 and beyond)
 struct Unit end
 ghost_len(n::Int) = length(ntuple(Returns(nothing), n))
@@ -83,6 +122,37 @@ vec_selectdim(n::Int, d::Int) = (y = collect(1.0:n); selectdim(y, d, 1) .*= 2; s
     # (natively the call is dynamic too, but works)
     @test MaxMethods1.own_limit(VS[3]) == 2
     @test_throws WasmCodegen.UnsupportedConstructs wcompile(MaxMethods1.own_limit, (VersionNumber,))
+    @testset "convert to a tuple type of a fixed length" begin
+        for (f, args) in ((cvt_mwe, ()), (cvt_bool3, (Int,)), (cvt_bool13, (Int,)), (cvt_float, (Int,)),
+                          (cvt_mixed, (Int,)), (cvt_ntuple3, (Int,)), (cvt_tint, (Int, Int)),
+                          (cvt_ntint, (Int, Int)), (cvt_tvar, (Int,)))
+            @test (WasmCodegen.compile(f, args; config=WasmCodegen.Config(verify=:error)); true)
+        end
+        # (the results of Base's method, which the trim patches replace here too)
+        @test cvt_mwe() == 5 && cvt_bool3(3) == 5 && cvt_bool3(2) == -1 && cvt_float(3) == 1.6875 &&
+              cvt_tint(1, 2) === 21.5 && cvt_tint(3, 2) === -3.0 && cvt_ntint(2, 2) === 32 && cvt_error(3) == 0 &&
+              cvt_error(2) == 1 && cvt_tvar(3) === 1.6875 && cvt_tvar(2) === -1.0
+        for n in (0, 2, 3, 4)
+            @wtest cvt_error(n)
+        end
+        @wtest cvt_mwe()
+        for n in 2:4
+            @wtest cvt_bool3(n)
+            @wtest cvt_float(n)
+            @wtest cvt_mixed(n)
+        end
+        for n in 12:14
+            @wtest cvt_bool13(n)
+        end
+        for n in 2:4
+            @wtest cvt_ntuple3(n)
+            @wtest cvt_tvar(n)
+        end
+        for (i, n) in ((1, 1), (1, 2), (2, 2), (3, 2), (1, 3))
+            @wtest cvt_tint(i, n)
+            @wtest cvt_ntint(i, n)
+        end
+    end
     @testset "egal and comparison" begin
         for (i, j) in ((1, 1), (2, 3), (3, 3), (4, 1), (5, 5), (8, 7), (9, 10))
             @wtest vn_egal(i, j)

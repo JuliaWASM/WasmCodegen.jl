@@ -69,6 +69,37 @@ let Runtime = WasmCodegen.Runtime
             end
             print(io, sym)
         end
+        # converting a tuple to a tuple type of a fixed length (as from a tuple of a length not
+        # known at compile time, `Tuple{Vararg{E}}`): Base's, with the length checked against
+        # the type's and a static `Val` instead of `typeintersect` and `Val(N)`; another length
+        # the same MethodError, by `Core.throw_methoderror` (`_tuple_error` makes the tuple
+        # `(T, x)`, of an abstract type). Also for a UnionAll of a fixed length (`NTuple{3}`,
+        # `Tuple{T,Int} where T`, `Tuple{Vararg{T,2}} where T`): its fields' types are `fieldtype`'s
+        # of the UnionAll, as Base's.
+        # (The length is `nfields`, where Base has its static parameter: no method of `length`.)
+        # (`x::Tuple`, the same signature as Base's `x::NTuple{N,Any}`, which it replaces, without
+        # its static parameter `N`: for a UnionAll `T` inference reaches the method by constant
+        # propagation, whose result is not inlined with a static parameter unknown, and the
+        # method then has no signature to compile for: a dynamic call)
+        function convert(::Type{T}, x::Tuple) where {T<:Tuple}
+            function cvt1(n)
+                @inline
+                Tn = fieldtype(T, n)
+                xn = getfield(x, n, #=boundscheck=#false)
+                xn isa Tn && return xn
+                return convert(Tn, xn)
+            end
+            n = $(Runtime.tuple_fixed_length)(T)
+            if n !== nothing
+                Core.nfields(x) == n || Core.throw_methoderror(convert, T, x)
+                return ntuple(cvt1, Val(n))
+            end
+            N = Core.nfields(x)
+            if typeintersect(NTuple{N,Any}, T) === Union{}
+                _tuple_error(T, x)
+            end
+            return ntuple(cvt1, Val(N))::NTuple{N,Any}
+        end
         # (`typesplit` reflects on and makes types: a table of the module's types instead)
         nonnothing_nonmissing_typeinfo(io::IO) =
             $(Runtime.map_type)($(Runtime.nonnothing_nonmissing), get(io, :typeinfo, Any))
