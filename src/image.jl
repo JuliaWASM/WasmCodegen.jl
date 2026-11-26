@@ -428,6 +428,10 @@ function new_object_global!(img::Image, @nospecialize(x))
         return g
     elseif T === Core.SimpleVector
         return tuple_array_global!(img, x, l)
+    elseif T === Method
+        return fields_object_global!(img, x, method_object_type!(ts), METHOD_FIELDS)
+    elseif T === Core.MethodInstance
+        return fields_object_global!(img, x, method_instance_type!(ts), METHOD_INSTANCE_FIELDS)
     elseif any(R -> T === R, OPAQUE_RUNTIME_TYPES)
         # an object the program holds but does not read (a CodeInstance kept in a build
         # record): the header only, so that `===` and `typeof` work; a field read of it is
@@ -1026,6 +1030,21 @@ end
 # runtime objects serialized with their header only (modules are named objects, above): a
 # `GlobalRef`'s binding too (whose `globalref` refers back to it)
 const OPAQUE_RUNTIME_TYPES = Any[Core.CodeInstance, Core.MethodInstance, Method, Core.Binding]
+
+# a runtime object of the header and some of its fields (`fields`: references, or numbers in an
+# i32), in the struct type `st` (`method_object_type!`, `method_instance_type!`)
+function fields_object_global!(img::Image, @nospecialize(x), st, fields)
+    ts = types(img)
+    init = Inst[Inst(:i32_const, typeid!(ts, typeof(x))), header_hash(img, x)]
+    for f in fields
+        v = getfield(x, f)
+        push!(init, v isa Union{Integer,Bool} ? Inst(:i32_const, Int32(v)) : Inst(:global_get, object_global!(img, v)))
+    end
+    push!(init, Inst(:struct_new, st))
+    g = add_global!(img.cgm.mod, global_name(img, x), RefType(st, false), false, init)
+    img.globals[x] = g
+    return g
+end
 
 function opaque_object_global!(img::Image, @nospecialize(x))
     ts = types(img)

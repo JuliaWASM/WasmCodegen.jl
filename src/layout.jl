@@ -264,6 +264,8 @@ function compute_layout(ts::Types, @nospecialize(T))
     is_inline_tuple(T) && return immutable_layout(ts, T)
     is_vararg_tuple(T) && return tuple_array_layout(ts, T, vararg_eltype(T))
     (T === Core.TypeName || T === Module) && return boxed_layout(ts, T, named_object_type!(ts))
+    T === Method && return boxed_layout(ts, T, method_object_type!(ts))
+    T === Core.MethodInstance && return boxed_layout(ts, T, method_instance_type!(ts))
     # a SimpleVector (a type's parameters): its elements in an array, as a large tuple's
     T === Core.SimpleVector && return tuple_array_layout(ts, T, Any)
     if !(T isa DataType) || !isconcretetype(T) || any(R -> T === R, RUNTIME_TYPES)
@@ -497,6 +499,44 @@ function named_object_type!(ts::Types)
                   final=true, super=ts.jlvalue)
     end
 end
+
+"""
+    method_object_type!(ts) -> TypeRef
+
+The Wasm struct type of `Method` objects: the header and the fields of `METHOD_FIELDS`, what a
+program reads of a method it holds (`which`'s result built at compile time, a build record,
+`functionloc`); the method's tables and code are not in the module.
+"""
+function method_object_type!(ts::Types)
+    get!(ts.boxes, :methodobject) do
+        ref(T) = FieldType(layout(ts, T).leaves[1].type, false)
+        add_type!(ts.mod, StructType([FieldType(I32, false), FieldType(I32, true),
+                                       ref(Symbol), ref(Module), ref(Symbol), FieldType(I32, false),
+                                       ref(Any), FieldType(I32, false), FieldType(I32, false),
+                                       FieldType(I32, false), FieldType(I32, false)]);
+                  final=true, super=ts.jlvalue)
+    end
+end
+
+"The fields of `Method` objects that `method_object_type!` holds, in its order."
+const METHOD_FIELDS = (:name, :module, :file, :line, :sig, :nargs, :nkw, :isva, :nospecialize)
+
+"""
+    method_instance_type!(ts) -> TypeRef
+
+The Wasm struct type of `Core.MethodInstance` objects: the header, `def` (a `Method` or a
+`Module`) and `specTypes`.
+"""
+function method_instance_type!(ts::Types)
+    get!(ts.boxes, :methodinstance) do
+        ref(T) = FieldType(layout(ts, T).leaves[1].type, false)
+        add_type!(ts.mod, StructType([FieldType(I32, false), FieldType(I32, true), ref(Any), ref(Any)]);
+                  final=true, super=ts.jlvalue)
+    end
+end
+
+"The fields of `Core.MethodInstance` objects that `method_instance_type!` holds, in its order."
+const METHOD_INSTANCE_FIELDS = (:def, :specTypes)
 
 "The field of the array of the objects of `Memory`, `String` and `Symbol`."
 const DATA_FIELD = HEADER_FIELDS
