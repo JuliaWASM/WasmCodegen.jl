@@ -8,10 +8,13 @@ module Time
 
 using ..Runtime: @wasm_method, WASI, Staging, wasi_check
 
+# (from the host's `clock_now`, which `time()` reads, as every host has it: a module for
+# JavaScript has no WASI clock; to the microsecond, as `jl_clock_now` is natively)
 @wasm_method function Base.Libc.TimeVal()
-    wasi_check(WASI.clock_time_get(WASI.CLOCK_REALTIME, UInt64(1000), Staging.SCRATCH_OUT), "clock_time_get")
-    ns = Staging.load64(Staging.SCRATCH_OUT)
-    return Base.Libc.TimeVal(Int64(div(ns, UInt64(1_000_000_000))), Int64(div(rem(ns, UInt64(1_000_000_000)), UInt64(1000))))
+    t = ccall(:jl_clock_now, Float64, ())
+    sec = floor(t)
+    usec = min(round(Int64, (t - sec) * 1e6), Int64(999_999))
+    return Base.Libc.TimeVal(Int64(sec), usec)
 end
 
 """
