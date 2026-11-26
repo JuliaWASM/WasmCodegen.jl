@@ -460,3 +460,13 @@ end
     @test wcompile(catch_div, (Int, Int)).cgm.exceptions === :control
     @test wcompile(catch_message, (Int,)).cgm.exceptions === :values
 end
+
+# backtraces: none in a module (no frames to look up), so code that takes one with an exception runs
+bt_catch(i::Int) = (try error("x$i") catch; length(catch_backtrace()) end)
+bt_here(i::Int) = length(backtrace()) + i
+bt_keep(i::Int) = (try i > 0 && error("x$i"); (false, false) catch e; bt = catch_backtrace(); (e isa ErrorException, bt isa Vector) end)
+@testset "backtraces" begin
+    @test wasm_run(wcompile(bt_catch, (Int,)), "bt_catch", 1; rettype=Int) == 0
+    @test wasm_run(wcompile(bt_here, (Int,)), "bt_here", 2; rettype=Int) == 2
+    @wtest bt_keep(1)
+end

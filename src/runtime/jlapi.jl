@@ -364,3 +364,11 @@ const N_THREADS_PER_POOL = Cint[0, 1]
 `N_THREADS_PER_POOL`, as natively from the C runtime's memory (see `@wasm_method`).
 """
 @wasm_method Threads._nthreads_in_pool(tpid::Int8) = Int(N_THREADS_PER_POOL[tpid + 1])
+
+"""
+`jl_backtrace_from_here`, `jl_get_backtrace`: the frames of a backtrace (`backtrace()`,
+`catch_backtrace()`), none here: a module has no frames to look up (`stacktrace` of them is
+empty). Code that keeps or prints a backtrace with an exception (`CapturedException`,
+`showerror(io, e, bt)`, `@error ... exception = (e, catch_backtrace())`) runs, without frames.
+"""
+empty_backtrace(args...) = Core.svec(Ptr{Cvoid}[], Any[])

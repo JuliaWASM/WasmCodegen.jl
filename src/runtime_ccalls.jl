@@ -48,6 +48,9 @@ for (name, f, kinds) in (
         (:jl_gc_new_weakref_th, Runtime.new_weakref, [:val, :val]),
         (:jl_gc_get_total_bytes, Runtime.gc_get_total_bytes, [:val]),
         (:jl_gc_num, Runtime.gc_num, Symbol[]),
+        # backtraces (`backtrace()`, `catch_backtrace()`): none, a module has no frames to look up
+        (:jl_backtrace_from_here, Runtime.empty_backtrace, [:val, :val]),
+        (:jl_get_backtrace, Runtime.empty_backtrace, Symbol[]),
         # floating point environment
         (:jl_set_fenv_rounding, Runtime.set_fenv_rounding, [:val]),
         (:jl_set_zero_subnormals, Runtime.set_zero_subnormals, [:val]))
