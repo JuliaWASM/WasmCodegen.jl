@@ -734,6 +734,7 @@ const RUNTIME_CCALLS = Dict{Symbol,RuntimeCcall}(
     :jl_stat_ctime => RuntimeCcall(Runtime.FS.stat_ctime, [:val]),
     :malloc => RuntimeCcall(Runtime.FS.malloc, [:val]),
     :free => RuntimeCcall(Runtime.FS.free, [:val]),
+    :calloc => RuntimeCcall(Runtime.FS.calloc, [:val, :val]),
     :uv_fs_req_cleanup => RuntimeCcall(Runtime.FS.req_cleanup, [:val]),
     :uv_fs_mkdir => RuntimeCcall(Runtime.FS.uv_fs_mkdir, [:val, :val, :val, :val, :val]),
     :uv_fs_rmdir => RuntimeCcall(Runtime.FS.uv_fs_rmdir, [:val, :val, :val, :val]),

@@ -311,3 +311,10 @@ sha_hashes(k::Int) = (s = repeat("abc", k); (hash(SHA.sha512(s)), hash(SHA.sha25
         @test r isa Tuple && r[1] === :trap
     end
 end
+
+# Libc.calloc: zeroed memory, as malloc's
+pb_calloc(i::Int) = (p = Libc.calloc(4, 8); z = unsafe_load(Ptr{Int}(p), 3); unsafe_store!(Ptr{Int}(p), i, 2);
+                     v = unsafe_load(Ptr{Int}(p), 2); Libc.free(p); (z, v))
+@testset "Libc.calloc" begin
+    @wtest pb_calloc(5)
+end
