@@ -205,9 +205,10 @@ end
     # (natively an UndefVarError; a module's field by a name known only at run time traps, as
     # for the runtime's other objects behind `Any`: DESIGN.md)
     @wtest module_field(1)
-    for f in (ordered_field, type_name)
-        @test_throws WasmCodegen.UnsupportedConstructs WasmCodegen.compile(f, (Int,))
-    end
+    # (a field of a type object known only at run time: from the module's tables of type fields)
+    @wtest type_name(1)
+    @wtest type_name(2)
+    @test_throws WasmCodegen.UnsupportedConstructs WasmCodegen.compile(ordered_field, (Int,))
     for f in (ordered_at, unequal_at, any_index_at)
         @test_throws WasmCodegen.UnsupportedConstructs WasmCodegen.compile(f, (Int, Int))
     end

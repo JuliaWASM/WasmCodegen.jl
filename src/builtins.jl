@@ -260,10 +260,14 @@ function get_field(fc::FnCtx, x::CGVal, i::Int)
         v = pop_val!(fc, FT)
         check_field_defined!(fc, T, i, v)
         return v
-    elseif T === Core.TypeName && fieldname(T, i) === :name
+    elseif T === Core.TypeName && fieldname(T, i) in TYPENAME_FIELDS
         push_val!(fc, x)
-        emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS)
-        return pop_val!(fc, Symbol)
+        emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS + findfirst(==(fieldname(T, i)), TYPENAME_FIELDS) - 1)
+        return pop_val!(fc, FT)
+    elseif (g = get(Runtime.TYPE_FIELDS, (T, fieldname(T, i)), nothing)) !== nothing
+        # a field of a type object known only at run time: from a table over the module's
+        # types (`Runtime.TYPE_FIELDS`)
+        return convert_repr(fc, call_runtime!(fc, Runtime.read_type_field, CGVal[ghost(typeof(g), g), x]), FT)
     elseif is_memory_type(T)
         name = fieldname(T, i)
         name === :ptr && return memory_ptr!(fc, x, FT)
@@ -587,6 +591,9 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
             emit!(fc.b, :i64_mul)
             return pop_val!(fc, Int)
         end
+        # (of a type object, the size of the type it is, not of a type object: from a table)
+        (x.typ === DataType || x.typ === UnionAll || x.typ === Union) &&
+            return call_runtime!(fc, Runtime.type_sizeof, CGVal[x])
         isconcretetype(x.typ) && !is_memory_type(x.typ) && x.typ !== String &&
             return const_value(fc, Core.sizeof(x.typ))
         unsupported("sizeof of a value of type ", x.typ)

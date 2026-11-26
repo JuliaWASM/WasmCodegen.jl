@@ -416,7 +416,9 @@ function new_object_global!(img::Image, @nospecialize(x))
         return bytes_object_global!(img, x)
     elseif is_memory_type(T)
         return memory_global!(img, x)
-    elseif T === Core.TypeName || T === Module
+    elseif T === Core.TypeName
+        return typename_object_global!(img, x)
+    elseif T === Module
         st = named_object_type!(ts)
         name = T === Module ? nameof(x) : x.name
         init = Inst[Inst(:i32_const, typeid!(ts, T)), header_hash(img, x),
@@ -1026,6 +1028,22 @@ end
 # runtime objects serialized with their header only (modules are named objects, above): a
 # `GlobalRef`'s binding too (whose `globalref` refers back to it)
 const OPAQUE_RUNTIME_TYPES = Any[Core.CodeInstance, Core.MethodInstance, Method, Core.Binding]
+
+# a TypeName: the header and the fields of `TYPENAME_FIELDS` (see `typename_object_type!`)
+function typename_object_global!(img::Image, tn::Core.TypeName)
+    ts = types(img)
+    st = typename_object_type!(ts)
+    init = Inst[Inst(:i32_const, typeid!(ts, Core.TypeName)), header_hash(img, tn)]
+    for f in (:name, :module, :singletonname, :names, :wrapper)
+        push!(init, Inst(:global_get, object_global!(img, getfield(tn, f))))
+    end
+    push!(init, Inst(:i32_const, Int32(tn.n_uninitialized)), Inst(:i32_const, Int32(tn.flags)),
+          Inst(:i32_const, Int32(tn.max_methods)), Inst(:struct_new, st))
+    g = add_global!(img.cgm.mod, "jl_typename_" * replace(string(tn.name), r"[^A-Za-z0-9_]" => "_"),
+                    RefType(st, false), false, init)
+    img.globals[tn] = g
+    return g
+end
 
 function opaque_object_global!(img::Image, @nospecialize(x))
     ts = types(img)

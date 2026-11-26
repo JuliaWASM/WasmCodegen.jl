@@ -754,3 +754,49 @@ Base.@assume_effects :foldable function tuple_fixed_length(@nospecialize(T::Type
     Base.isvarargtype(va) || return n
     return isdefined(va, :N) && va.N isa Int ? n - 1 + va.N::Int : nothing
 end
+
+# The fields of type objects a program reads at run time (`T.name`, `T.parameters`, ... of a
+# `DataType`, `UnionAll` or `Union` known only at run time; `get_field`, builtins.jl): each a
+# function of the module's types, for a table (`map_type_value`), of the value in an object
+# (a table holds objects: `nothing`, flags and sizes are inline values), `NO_TYPE_FIELD` for a
+# type of another kind. (A type object here is its header and its id: these are what Base's
+# reflection, `fieldcount`, `isconcretetype`, `supertype`, ..., reads of one.)
+mutable struct TypeField   # (mutable: an object of the image; never mutated)
+    v::Any
+end
+const NO_TYPE_FIELD = TypeField(nothing)
+datatype_name(@nospecialize(T)) = T isa DataType ? TypeField(T.name) : NO_TYPE_FIELD
+datatype_super(@nospecialize(T)) = T isa DataType ? TypeField(T.super) : NO_TYPE_FIELD
+datatype_parameters(@nospecialize(T)) = T isa DataType ? TypeField(T.parameters) : NO_TYPE_FIELD
+datatype_types(@nospecialize(T)) = T isa DataType && isdefined(T, :types) ? TypeField(T.types) : NO_TYPE_FIELD
+datatype_hash(@nospecialize(T)) = T isa DataType ? TypeField(T.hash) : NO_TYPE_FIELD
+datatype_flags(@nospecialize(T)) = T isa DataType ? TypeField(T.flags) : NO_TYPE_FIELD
+unionall_var(@nospecialize(T)) = T isa UnionAll ? TypeField(T.var) : NO_TYPE_FIELD
+unionall_body(@nospecialize(T)) = T isa UnionAll ? TypeField(T.body) : NO_TYPE_FIELD
+union_a(@nospecialize(T)) = T isa Union ? TypeField(T.a) : NO_TYPE_FIELD
+union_b(@nospecialize(T)) = T isa Union ? TypeField(T.b) : NO_TYPE_FIELD
+"The functions of `map_type_value` of the fields of type objects, by (type, field name)."
+const TYPE_FIELDS = Dict{Tuple{Any,Symbol},Any}(
+    (DataType, :name) => datatype_name, (DataType, :super) => datatype_super,
+    (DataType, :parameters) => datatype_parameters, (DataType, :types) => datatype_types,
+    (DataType, :hash) => datatype_hash, (DataType, :flags) => datatype_flags,
+    (UnionAll, :var) => unionall_var, (UnionAll, :body) => unionall_body,
+    (Union, :a) => union_a, (Union, :b) => union_b)
+"`getfield(T, f)` of a type object `T` known only at run time: `g` of `TYPE_FIELDS`, from its table."
+@inline read_type_field(g::F, @nospecialize(T)) where {F} = (map_type_value(g, T)::TypeField).v
+
+"For `map_type_value`: `sizeof(T)`, or the message of the error it natively throws."
+type_size(@nospecialize(T)) = try
+    TypeField(Core.sizeof(T))
+catch err
+    TypeField(err isa ErrorException ? err.msg : sprint(showerror, err))
+end
+"""
+`sizeof(T)` of a type known only at run time (the builtin `sizeof` of a type object: the size
+of the type, not of the object), from a table over the module's types (`type_size`).
+"""
+function type_sizeof(@nospecialize(T))
+    r = (map_type_value(type_size, T)::TypeField).v
+    r isa Int && return r
+    throw(ErrorException(r::String))
+end
