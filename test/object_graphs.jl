@@ -354,3 +354,25 @@ end
     @test wasm_run(WasmCodegen.compile(S.read_holder, (); config = WasmCodegen.Config(shell_first_mutables = true)),
                    "read_holder"; rettype = UInt) == 0
 end
+
+# the fields a program reads of the Methods and MethodInstances the image holds (name, module,
+# file, line, sig, nargs, isva; def, specTypes), as of the build
+module HoldsMethods
+    f(x::Int) = x + 1
+    f(x::Float64) = x * 2
+    f(0)
+    const M = Ref{Method}(which(f, (Int,)))
+    const MS = collect(methods(f))
+    const MI = first(Base.method_instances(f, Tuple{Int}, Base.get_world_counter()))
+    method_fields(x::Float64) = (m = M[]; (hash(String(m.name)), m.module === HoldsMethods, hash(String(m.file)),
+                                           Int(m.line), Int(m.nargs), m.isva, m.sig === Tuple{typeof(f),Int}))
+    nargs(i::Int) = Int(MS[i].nargs)
+    mi_fields(x::Float64) = (MI.specTypes === Tuple{typeof(f),Int}, MI.def === M[])
+end
+
+@testset "fields of Methods and MethodInstances held by the image" begin
+    @wtest HoldsMethods.method_fields(1.0)
+    @wtest HoldsMethods.nargs(1)
+    @wtest HoldsMethods.nargs(2)
+    @wtest HoldsMethods.mi_fields(1.0)
+end

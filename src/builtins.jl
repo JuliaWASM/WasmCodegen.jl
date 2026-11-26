@@ -260,6 +260,12 @@ function get_field(fc::FnCtx, x::CGVal, i::Int)
         v = pop_val!(fc, FT)
         check_field_defined!(fc, T, i, v)
         return v
+    elseif (T === Method && fieldname(T, i) in METHOD_FIELDS) ||
+           (T === Core.MethodInstance && fieldname(T, i) in METHOD_INSTANCE_FIELDS)
+        fs = T === Method ? METHOD_FIELDS : METHOD_INSTANCE_FIELDS
+        push_val!(fc, x)
+        emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS + findfirst(==(fieldname(T, i)), fs) - 1)
+        return pop_val!(fc, FT)
     elseif T === Core.TypeName && fieldname(T, i) === :name
         push_val!(fc, x)
         emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS)
