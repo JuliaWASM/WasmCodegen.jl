@@ -49,21 +49,36 @@ end
 
 "The `Expr` of a parse with errors, as `core_parser_hook` makes it (see `error_message`)."
 function error_expr(stream::JS.ParseStream, code::String, filename::String, lineno::Int, options::Symbol)
-    errspec = JS.first_tree_error(stream)
-    tag = JS._incomplete_tag(errspec, JS.last_non_whitespace_byte(stream))
+    pos_before_comments = JS.last_non_whitespace_byte(stream)
+    @static if isdefined(JS, :first_tree_error)
+        # (JuliaSyntax of Julia 1.13: the errors from the stream)
+        errspec = JS.first_tree_error(stream)
+        tag = JS._incomplete_tag(errspec, pos_before_comments)
+    else
+        # (of Julia 1.12: from a tree of the stream)
+        tree = JS.build_tree(JS.SyntaxNode, stream; first_line = lineno, filename = filename)
+        tag = JS._incomplete_tag(tree, pos_before_comments)
+    end
     exc = JS.ParseError(stream; filename = filename, first_line = lineno, incomplete_tag = tag)
     error_ex = Expr(tag === :none ? :error : :incomplete, Base.Meta.ParseError(error_message(exc), exc))
     options === :all || return error_ex
     # (a toplevel error: the expressions before it, the line number, the error)
-    source = JS.SourceFile(stream; filename = filename, first_line = lineno)
-    topex = JS.build_tree(Expr, stream, source)
+    @static if isdefined(JS, :first_tree_error)
+        source = JS.SourceFile(stream; filename = filename, first_line = lineno)
+        topex = JS.build_tree(Expr, stream, source)
+        errline = JS.source_line(source, JS.first_byte(errspec.node))
+    else
+        topex = Expr(tree)
+        _, errort = JS._first_error(tree)
+        errline = JS.source_line(errort)
+    end
     i = findfirst(JS._has_nested_error, topex.args)
     i === nothing && (i = length(topex.args) + 1)
     if i > 1 && topex.args[i-1] isa LineNumberNode
         i -= 1
     end
     resize!(topex.args, i - 1)
-    push!(topex.args, LineNumberNode(JS.source_line(source, JS.first_byte(errspec.node)), filename))
+    push!(topex.args, LineNumberNode(errline, filename))
     push!(topex.args, error_ex)
     return topex
 end
