@@ -88,6 +88,9 @@ const CONST_FOREIGNCALLS = Dict{Symbol,Any}(
     :jl_force_trace_compile_timing_enable => nothing, :jl_force_trace_compile_timing_disable => nothing,
     :jl_force_trace_dispatch_enable => nothing, :jl_force_trace_dispatch_disable => nothing,
     :jl_set_precompile_field_replace => nothing, :jl_is_in_pure_context => false,
+    # (a module never generates output: `Base.generating_output()`, which `OncePerProcess` and
+    # `__precompile__(false)` call at run time, is false)
+    :jl_generating_output => 0,
     # the build and the machine
     :jl_is_debugbuild => 0, :jl_is_assertsbuild => 0, :jl_is_memdebug => 0,
     :jl_running_on_valgrind => 0, :jl_SC_CLK_TCK => 100, :jl_getpagesize => 65536,

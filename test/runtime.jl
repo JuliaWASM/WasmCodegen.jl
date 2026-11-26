@@ -229,3 +229,18 @@ rt_typeintersect(x::Int) = (typeintersect(x > 0 ? Vector{Int} : Vector, Abstract
         occursin(api, msg) || @info "diagnostic" f msg
     end
 end
+
+# a module never generates output (`jl_generating_output`): `Base.generating_output()` is false, and
+# `OncePerProcess`, which calls `__precompile__(false)` when it first runs, runs its initializer
+const RT_ONCE = Base.OncePerProcess{Int}(() -> 41)
+rt_once(i::Int) = (o = Base.OncePerProcess{Int}(() -> 40 + i); o() + o())
+rt_once_const(i::Int) = RT_ONCE() + i
+rt_generating_output() = Base.generating_output()
+rt_not_precompiling(i::Int) = (__precompile__(false); i)
+
+@testset "generating output" begin
+    @wtest rt_once(2)
+    @wtest rt_once_const(1)
+    @wtest rt_generating_output()
+    @wtest rt_not_precompiling(3)
+end
