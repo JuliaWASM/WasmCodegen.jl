@@ -359,11 +359,12 @@ end
 """
     invoke_in_world_module(world, f, args...; kwargs...)
 
-What a module compiles for `Core.invoke_in_world` (`Base.invoke_in_world`), which inference
-replaces by this (see `CC.abstract_call_known(::WasmInterpreter, ...)`): a module has one world,
-the one its code was compiled in (`Base.get_world_counter()` and `Base.tls_world_age()` are that
-world here), so a call in it is a direct call. The methods of another world are not in the module:
-a call in one is an error.
+What a module compiles for `Base.invoke_in_world` (the builtin `Core.invoke_in_world`, or
+`Core._call_in_world` before Julia 1.13), which inference replaces by this (see
+`CC.abstract_call_known(::WasmInterpreter, ...)`): a module has one world, the one its code was
+compiled in (`Base.get_world_counter()` and `Base.tls_world_age()` are that world here), so a call
+in it is a direct call. The methods of another world are not in the module: a call in one is an
+error.
 """
 function invoke_in_world_module(world::UInt, f::F, args::Vararg{Any,N}; kwargs...) where {F,N}
     @inline
