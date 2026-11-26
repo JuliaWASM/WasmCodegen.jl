@@ -263,7 +263,8 @@ function compute_layout(ts::Types, @nospecialize(T))
     # concrete type, but its values are inline all the same
     is_inline_tuple(T) && return immutable_layout(ts, T)
     is_vararg_tuple(T) && return tuple_array_layout(ts, T, vararg_eltype(T))
-    (T === Core.TypeName || T === Module) && return boxed_layout(ts, T, named_object_type!(ts))
+    T === Module && return boxed_layout(ts, T, named_object_type!(ts))
+    T === Core.TypeName && return boxed_layout(ts, T, typename_object_type!(ts))
     # a SimpleVector (a type's parameters): its elements in an array, as a large tuple's
     T === Core.SimpleVector && return tuple_array_layout(ts, T, Any)
     if !(T isa DataType) || !isconcretetype(T) || any(R -> T === R, RUNTIME_TYPES)
@@ -497,6 +498,27 @@ function named_object_type!(ts::Types)
                   final=true, super=ts.jlvalue)
     end
 end
+
+"""
+    typename_object_type!(ts) -> TypeRef
+
+The Wasm struct type of `Core.TypeName` objects: the header, the name (first, as a `Module`'s,
+`named_object_type!`), and the fields reflection reads of a type's name at run time
+(`TYPENAME_FIELDS`: `parentmodule`, `fieldnames`, `ismutabletype`, `fieldcount`, ...).
+"""
+function typename_object_type!(ts::Types)
+    get!(ts.boxes, :typenameobject) do
+        ref(T) = FieldType(layout(ts, T).leaves[1].type, false)
+        add_type!(ts.mod, StructType([FieldType(I32, false), FieldType(I32, true),
+                                       ref(Symbol), ref(Module), ref(Symbol), ref(Core.SimpleVector),
+                                       ref(Any), FieldType(I32, false), FieldType(I32, false),
+                                       FieldType(I32, false)]);
+                  final=true, super=ts.jlvalue)
+    end
+end
+
+"The fields of `Core.TypeName` objects that `typename_object_type!` holds, in its order."
+const TYPENAME_FIELDS = (:name, :module, :singletonname, :names, :wrapper, :n_uninitialized, :flags, :max_methods)
 
 "The field of the array of the objects of `Memory`, `String` and `Symbol`."
 const DATA_FIELD = HEADER_FIELDS

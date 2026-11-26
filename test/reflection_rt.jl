@@ -244,4 +244,50 @@ set_many(i::Int) = (r = Ref(0);
     end
 end
 
+
+# the fields of type objects known only at run time (`T.name`, `T.parameters`, `T.super`, ... of a
+# DataType, UnionAll or Union; `Runtime.TYPE_FIELDS`), and of their TypeNames: what Base's reflection
+# reads of a type (`fieldcount`, `isconcretetype`, `supertype`, `nameof`, `parentmodule`, ...);
+# and `sizeof` of a type object, the size of the type it is
+struct RPt; x::Float64; y::Float64; end
+mutable struct RMut; a::Int; end
+const RT_DTS = Any[Int, Float64, RPt, Vector{Int}, Tuple{Int,Float64}, String, RMut, AbstractFloat, Signed]
+const RT_UAS = Any[Vector, Array, AbstractVector]
+const RT_UNS = Any[Union{Int,Nothing}, Union{Float64,String,Missing}]
+const RT_VALS = Any[1, 2.0, RPt(1.0, 2.0), [1, 2], (1, 2.0), "s", RMut(1)]
+const RT_MODS = Module[Core, Base, ReflectionRT]
+rdt(i::Int) = RT_DTS[i]::DataType
+pos(x, v) = (for k in eachindex(v); v[k] === x && return k; end; 0)
+dt_preds(i::Int) = (T = rdt(i); (isconcretetype(T), isabstracttype(T), isbitstype(T), ismutabletype(T),
+                                 isstructtype(T), isprimitivetype(T)))
+dt_fields(i::Int) = (T = rdt(i); (hash(String(nameof(T))), length(T.parameters), pos(supertype(T), RT_DTS),
+                                  pos(T.super, Any[Signed, AbstractFloat, Any, DenseVector{Int}, Real]),
+                                  pos(parentmodule(T), RT_MODS)))
+dt_fieldcount(i::Int) = (T = rdt(i); (fieldcount(T), length(T.types)))
+dt_sizeof(i::Int) = sizeof(rdt(i))
+dt_typeof_name(i::Int) = (x = RT_VALS[i]; (hash(String(nameof(typeof(x)))), fieldcount(typeof(x))))
+dt_typename(i::Int) = (tn = rdt(i).name; (pos(tn.module, RT_MODS), length(tn.names), hash(String(tn.name))))
+ua_fields(i::Int) = (U = RT_UAS[i]::UnionAll; (Base.unwrap_unionall(U) isa DataType, hash(String(U.var.name)), U.body isa UnionAll))
+un_fields(i::Int) = (U = RT_UNS[i]::Union; (length(Base.uniontypes(U)), U.a === Nothing || U.a === Float64))
+@testset "fields of type objects known only at run time" begin
+    for i in eachindex(RT_DTS)
+        @wtest dt_preds(i)
+        @wtest dt_fields(i)
+        @wtest dt_typename(i)
+        @wtest dt_sizeof(i)   # (abstract types: the native error, a trap)
+    end
+    for i in 1:7
+        @wtest dt_fieldcount(i)
+    end
+    for i in eachindex(RT_VALS)
+        @wtest dt_typeof_name(i)
+    end
+    for i in eachindex(RT_UAS)
+        @wtest ua_fields(i)
+    end
+    for i in eachindex(RT_UNS)
+        @wtest un_fields(i)
+    end
+end
+
 end
