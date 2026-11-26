@@ -586,6 +586,8 @@ stat_ctime(b::Ptr{UInt8}) = reinterpret(Float64, load_le(b, 72, 8))
 "`malloc(n)`: `n` bytes of a new object (a pointer with an owner); `free` does nothing."
 malloc(n::UInt) = Ptr{Cvoid}(pointer(Memory{UInt8}(undef, max(Int(n), 1))))
 free(p::Ptr{Cvoid}) = nothing
+# (`Libc.calloc`: as `malloc`, zeroed)
+calloc(n::UInt, size::UInt) = (m = Memory{UInt8}(undef, max(Int(n * size), 1)); fill!(m, 0x00); Ptr{Cvoid}(pointer(m)))
 req_cleanup(req::Ptr{Cvoid}) = nothing
 
 # the permission bits (and setuid/setgid/sticky) of the absolute path `path` (that exists,
