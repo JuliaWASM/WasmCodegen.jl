@@ -331,6 +331,14 @@ function emit_foreigncall!(fc::FnCtx, ex::Expr, @nospecialize(typ))
         push_val!(fc, convert_repr(fc, args[1]::CGVal, Module))
         emit!(fc.b, :struct_get, layout(fc, Module).wtype, HEADER_FIELDS)
         return pop_val!(fc, Symbol)
+    elseif name isa Symbol && haskey(BINDING_QUERIES, name) && length(args) == 2 &&
+           all(a -> a isa CGVal && isconstant(a), args) &&
+           constant_value(args[1]) isa Module && constant_value(args[2]) isa Symbol
+        # a query of a binding known at compile time (`isconst`, `ispublic`, `isexported`): a fact
+        # of the module's one world, answered as the build's
+        m, s = constant_value(args[1]), constant_value(args[2])
+        r = Base.invoke_in_world(fc.cgm.world.world, BINDING_QUERIES[name], m, s)::Bool
+        return const_value(fc, convert(typ, Cint(r)))
     elseif name isa Symbol && haskey(CONST_FOREIGNCALLS, name)
         # a constant here (`runtime_ccalls.jl`)
         v = CONST_FOREIGNCALLS[name]

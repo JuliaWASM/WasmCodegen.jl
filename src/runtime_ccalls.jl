@@ -94,6 +94,14 @@ const CONST_FOREIGNCALLS = Dict{Symbol,Any}(
     :jl_getallocationgranularity => 65536, :jl_ispty => 0,
     :jl_get_zero_subnormals => 0, :jl_get_fenv_rounding => Base.Rounding.JL_FE_TONEAREST)
 
+"""
+The C runtime's queries of a binding (`(m, s) -> Cint`), answered when the module is compiled where
+the binding is known then (`foreigncall.jl`): its Julia function, called in the program's world.
+"""
+const BINDING_QUERIES = Dict{Symbol,Any}(
+    :jl_is_const => isconst, :jl_module_public_p => Base.ispublic,
+    :jl_module_exports_p => Base.isexported, :jl_is_binding_deprecated => Base.isdeprecated)
+
 "The C runtime's global variables, as the objects of the module that hold their values."
 const C_GLOBALS = Dict{Symbol,Any}(
     :jl_gc_have_pending_finalizers => Runtime.PENDING_FINALIZERS,
