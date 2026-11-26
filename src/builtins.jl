@@ -133,6 +133,84 @@ function emit_atomic_field!(fc::FnCtx, @nospecialize(f), args::Vector{Any}, @nos
     end
 end
 
+"""
+The atomic operations on a memory's element (`memoryrefswap!`, `memoryrefmodify!`,
+`memoryrefreplace!`, `memoryrefsetonce!`, of `@atomic m[i] ...` on an `AtomicMemory`) and on a
+global (`swapglobal!`, `modifyglobal!`, `replaceglobal!`, `setglobalonce!`, of a binding known
+at compile time): as on a field, the reads and writes they are, in order (one thread).
+"""
+function emit_atomic_memory!(fc::FnCtx, @nospecialize(f), args::Vector{Any}, @nospecialize(typ))
+    r = args[1]::CGVal
+    E = ref_eltype(r.typ)
+    get() = outlined_memoryrefget!(fc, r, args[end], E)
+    set!(v) = outlined_memoryrefset!(fc, r, v, args[end])
+    if f === Core.memoryrefswap!
+        old = get()
+        set!(args[2])
+        return old
+    elseif f === Core.memoryrefmodify!
+        op, v = args[2]::CGVal, args[3]::CGVal
+        isconstant(op) || unsupported("memoryrefmodify! of a function not known at compile time")
+        old = get()
+        new = call_runtime!(fc, constant_value(op), CGVal[old, v])
+        set!(new)
+        return emit_new!(fc, typ, CGVal[old, new])
+    elseif f === Core.memoryrefreplace!
+        old = get()
+        success = emit_egal!(fc, old, args[2])
+        push_val!(fc, success)
+        if!(fc.b); set!(args[3]); end!(fc.b)
+        return emit_new!(fc, typ, CGVal[old, success])
+    else
+        # memoryrefsetonce!: set if unassigned
+        assigned = outlined_isassigned!(fc, r, args[end])
+        push_val!(fc, assigned); emit!(fc.b, :i32_eqz)
+        k = new_local!(fc, I32)
+        emit!(fc.b, :local_tee, k)
+        if!(fc.b); set!(args[2]); end!(fc.b)
+        emit!(fc.b, :local_get, k)
+        return pop_val!(fc, Bool)
+    end
+end
+
+function emit_atomic_global!(fc::FnCtx, @nospecialize(f), args::Vector{Any}, @nospecialize(typ))
+    m, s = args[1], args[2]
+    (m isa CGVal && s isa CGVal && isconstant(m) && isconstant(s)) ||
+        unsupported(f, " of a binding not known at compile time")
+    ref = GlobalRef(constant_value(m), constant_value(s))
+    get() = operand(fc, ref)
+    if f === Core.swapglobal!
+        old = get()
+        set_global_var!(fc, ref, args[3])
+        return old
+    elseif f === Core.modifyglobal!
+        op, v = args[3]::CGVal, args[4]::CGVal
+        isconstant(op) || unsupported("modifyglobal! of a function not known at compile time")
+        old = get()
+        new = call_runtime!(fc, constant_value(op), CGVal[old, v])
+        set_global_var!(fc, ref, new)
+        return emit_new!(fc, typ, CGVal[old, new])
+    elseif f === Core.replaceglobal!
+        old = get()
+        success = emit_egal!(fc, old, args[3])
+        push_val!(fc, success)
+        if!(fc.b); set_global_var!(fc, ref, args[4]); end!(fc.b)
+        return emit_new!(fc, typ, CGVal[old, success])
+    else
+        # setglobalonce!: set if undefined
+        defined = isdefined_global!(fc, ref)
+        push_val!(fc, defined); emit!(fc.b, :i32_eqz)
+        k = new_local!(fc, I32)
+        emit!(fc.b, :local_tee, k)
+        if!(fc.b); set_global_var!(fc, ref, args[3]); end!(fc.b)
+        emit!(fc.b, :local_get, k)
+        return pop_val!(fc, Bool)
+    end
+end
+
+const ATOMIC_MEMORY_BUILTINS = Any[getfield(Core, n) for n in (:memoryrefswap!, :memoryrefmodify!, :memoryrefreplace!, :memoryrefsetonce!) if isdefined(Core, n)]
+const ATOMIC_GLOBAL_BUILTINS = Any[getfield(Core, n) for n in (:swapglobal!, :modifyglobal!, :replaceglobal!, :setglobalonce!) if isdefined(Core, n)]
+
 """Whether `f` names no field of the concrete type `T` (in code inference has not proven dead).
 (Of a module, `getfield` with a Symbol is natively a global of the module.)"""
 is_no_field(@nospecialize(T), @nospecialize(f)) =
@@ -606,6 +684,10 @@ function emit_builtin!(fc::FnCtx, f::Core.Builtin, args::Vector{Any}, @nospecial
         m, s = args[1], args[2]
         (isconstant(m) && isconstant(s)) || unsupported("setglobal! of a binding not known at compile time")
         return set_global_var!(fc, GlobalRef(constant_value(m), constant_value(s)), args[3])
+    elseif any(g -> f === g, ATOMIC_GLOBAL_BUILTINS)
+        return emit_atomic_global!(fc, f, args, typ)
+    elseif any(g -> f === g, ATOMIC_MEMORY_BUILTINS)
+        return emit_atomic_memory!(fc, f, args, typ)
     elseif f === Core.memoryrefnew
         return outlined_memoryrefnew!(fc, args)
     elseif f === Core.memoryrefget
