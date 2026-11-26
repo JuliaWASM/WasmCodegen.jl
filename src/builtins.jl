@@ -676,6 +676,13 @@ end
 `Union{Type{A}, Type{B}, ...}`, as `typeof` of a value of a union is): of the one it is.
 """
 function isa_types!(fc::FnCtx, x::CGVal, t::CGVal)
+    # of any type object (`T::DataType` known only at run time) and a value that is not a type
+    # (for which `x isa T` is `typeof(x) <: T`; for a type, it is also `Type{x} <: T`): from the
+    # tables of `typeof` and of subtyping
+    if t.typ <: Type && typeintersect(x.typ, Type) === Union{} && !(t.typ isa Union)
+        tx = isconcretetype(x.typ) ? const_value(fc, x.typ) : typeof_any!(fc, x, DataType)
+        return emit_subtype!(fc, tx, t)
+    end
     Ts = t.typ isa Union ? Base.uniontypes(t.typ) : Any[]
     all(S -> S isa DataType && S.name === Type.body.name && !(S.parameters[1] isa TypeVar), Ts) && !isempty(Ts) ||
         unsupported("isa with a type not known at compile time (of type ", t.typ, ")")

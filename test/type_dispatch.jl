@@ -96,3 +96,21 @@ end
     @wtest td_many(513, 513, 600)
     @wtest td_many(600, 599, 600)
 end
+
+# `x isa T` and `typeassert(x, T)` of a type known only at run time and a value that cannot be a
+# type: `typeof(x) <: T`, from the tables of typeof and of subtyping
+const TD_ISA_TYPES = Any[Int, Float64, Real, AbstractFloat, Integer, Number, String, Union{Int,Float64}]
+td_isa_t(j::Int) = TD_ISA_TYPES[j]::Type
+td_isa(i::Int, j::Int) = (Number[1, 2.5, 0x3, 1 // 2][i]) isa td_isa_t(j)
+td_isa_count(j::Int) = count(x -> x isa td_isa_t(j), Number[1, 2.5, 0x3, 1 // 2])
+td_typeassert(i::Int, j::Int) = (try typeassert(Number[1, 2.5][i], td_isa_t(j)); 1 catch e; e isa TypeError ? 2 : 3 end)
+@testset "isa of a type known only at run time" begin
+    for i in 1:4, j in eachindex(TD_ISA_TYPES)
+        @wtest td_isa(i, j)
+    end
+    for j in eachindex(TD_ISA_TYPES)
+        @wtest td_isa_count(j)
+    end
+    @wtest td_typeassert(1, 5)
+    @wtest td_typeassert(2, 5)
+end
