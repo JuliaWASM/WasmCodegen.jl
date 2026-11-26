@@ -1135,9 +1135,14 @@ function emit_expr!(fc::FnCtx, ex::Expr, @nospecialize(typ))
     elseif head === :invoke
         return emit_invoke!(fc, ex, typ)
     elseif head === :invoke_modify
-        # `modifyfield!(x, f, op, v, order)` with the method of `op` resolved
+        # `modifyfield!(x, f, op, v, order)` with the method of `op` resolved (or, of the
+        # builtin named second, `modifyglobal!(m, s, op, v)`, `memoryrefmodify!(r, op, v, ...)`)
+        f = ex.args[2]
+        f isa GlobalRef && (f = getglobal(f.mod, f.name))
+        f isa QuoteNode && (f = f.value)
+        f isa Core.Builtin || (f = Core.modifyfield!)
         args = Any[operand(fc, a) for a in ex.args[3:end]]
-        return emit_builtin!(fc, Core.modifyfield!, args, typ)
+        return emit_builtin!(fc, f, args, typ)
     elseif head === :new
         T = operand(fc, ex.args[1])
         args = CGVal[operand(fc, a) for a in ex.args[2:end]]

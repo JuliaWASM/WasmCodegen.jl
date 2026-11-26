@@ -195,3 +195,50 @@ end
         @wtest shown(i)
     end
 end
+
+# atomic operations on the elements of an AtomicMemory (`@atomic m[i] ...`: memoryrefmodify!,
+# memoryrefswap!, memoryrefreplace!, memoryrefsetonce!) and on globals of a binding known at
+# compile time (swapglobal!, modifyglobal!, replaceglobal!, setglobalonce!): with one thread, the
+# reads and writes they are
+function amem_ops(i::Int)
+    m = AtomicMemory{Int}(undef, 2)
+    @atomic m[1] = i
+    @atomic m[2] = 0
+    a = @atomic m[1] += 1
+    b = (@atomic m[2] max i).second
+    c = @atomicswap m[1] = 7
+    r1 = @atomicreplace m[2] i => 9
+    r2 = @atomicreplace m[2] i => 11
+    return (a, b, c, r1.old, r1.success, r2.old, r2.success, @atomic(m[1]), @atomic(m[2]))
+end
+function amem_once(i::Int)
+    m = AtomicMemory{Any}(undef, 1)
+    x = @atomiconce m[1] = i
+    y = @atomiconce m[1] = 0
+    return (x, y, (@atomic m[1])::Int)
+end
+amem_bounds(i::Int) = (m = AtomicMemory{Int}(undef, 2); @atomic m[1] = 0; @atomic m[2] = 0; @atomic m[i] += 1)
+global COV_G::Int = 0
+global COV_G_ANY::Any = nothing
+global COV_G_ONCE::Int
+function glob_ops(i::Int)
+    global COV_G = 3
+    a = swapglobal!(@__MODULE__, :COV_G, i)
+    b = modifyglobal!(@__MODULE__, :COV_G, +, 1)
+    r1 = replaceglobal!(@__MODULE__, :COV_G, i + 1, 10)
+    r2 = replaceglobal!(@__MODULE__, :COV_G, i + 1, 20)
+    swapglobal!(@__MODULE__, :COV_G_ANY, i)
+    return (a, b.first, b.second, r1.old, r1.success, r2.old, r2.success, COV_G, COV_G_ANY::Int)
+end
+glob_once(i::Int) = (a = setglobalonce!(@__MODULE__, :COV_G_ONCE, i); b = setglobalonce!(@__MODULE__, :COV_G_ONCE, 0); (a, b, COV_G_ONCE))
+
+@testset "atomics on memory and globals" begin
+    @wtest amem_ops(4)
+    @wtest amem_once(4)
+    @wtest amem_bounds(2)
+    @wtest amem_bounds(3)   # (a BoundsError natively: a trap)
+    @wtest glob_ops(4)
+    # (compiled before the native run defines the global: the module's image has it undefined)
+    c = wcompile(glob_once, (Int,))
+    @test wasm_run(c, "glob_once", 4; rettype=Tuple{Bool,Bool,Int}) == (true, false, 4)
+end
