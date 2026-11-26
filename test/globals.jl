@@ -109,3 +109,15 @@ end
     @test read_chain() == 17
     @wtest binding_const()
 end
+
+# queries of a binding known at compile time (isconst, ispublic, isexported): facts of the module's
+# one world, answered when it is compiled
+const GQ_CONST = 5
+global GQ_NONCONST::Int = 1
+gq_isconst() = (isconst(@__MODULE__, :GQ_CONST), isconst(@__MODULE__, :GQ_NONCONST), isconst(Base, :sin))
+gq_public() = (Base.ispublic(Base, :sin), Base.ispublic(Base, :ispublic), Base.ispublic(Base, :_xyz),
+               Base.isexported(Base, :sin), Base.isexported(Base, :ispublic))
+@testset "binding queries known at compile time" begin
+    @wtest gq_isconst()
+    @wtest gq_public()
+end
