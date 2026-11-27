@@ -44,14 +44,17 @@ end
     P = ParsePrograms
     cfg = WasmCodegen.Config(trim = :unsafe)
     c = WasmCodegen.compile(P.parse_shape, (Int,); config = cfg)
+    # (Julia 1.12's JuliaSyntax builds the `Expr`s of these statements, 1 to 5, through one of the
+    # constructs that are traps here: broken there; errors and whitespace parse as natively)
+    ok = VERSION >= v"1.13-"
     for i in 1:8
-        @test wasm_run(c, "parse_shape", i; rettype = Tuple{UInt,Int}) == P.parse_shape(i)
+        @test wasm_run(c, "parse_shape", i; rettype = Tuple{UInt,Int}) == P.parse_shape(i) broken = !ok && i <= 5
     end
     # (a `for` loop: JuliaSyntax splats its iteration spec into an `Expr`)
     @test_broken wasm_run(c, "parse_shape", 9; rettype = Tuple{UInt,Int}) == P.parse_shape(9)
     e = WasmCodegen.compile(P.parse_error, (Int,); config = cfg)
     for i in (1, 6, 7)
-        @test wasm_run(e, "parse_error", i; rettype = Int) == P.parse_error(i)
+        @test wasm_run(e, "parse_error", i; rettype = Int) == P.parse_error(i) broken = !ok && i == 1
     end
     # (a toplevel block: the same splats)
     a = WasmCodegen.compile(P.parseall_length, (Int,); config = cfg)
