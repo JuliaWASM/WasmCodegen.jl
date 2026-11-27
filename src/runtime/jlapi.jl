@@ -356,6 +356,29 @@ end
 "`Base.JLOptions()`: the build process's options (a program compiled into a module runs with the options it was built with)."
 @wasm_method Base.JLOptions() = BUILD_JLOPTIONS[]
 
+"""
+    invoke_in_world_module(world, f, args...)
+
+What a module compiles for a call of the builtin `Core.invoke_in_world` (`Base.invoke_in_world`),
+which inference replaces by this (see `CC.abstract_call_known(::WasmInterpreter, ...)`). A module
+has one world, the one its code was compiled in (`Base.get_world_counter()` and
+`Base.tls_world_age()` are that world here), so a call in it is a direct call, and so is one in a
+later world, which natively is a call in the latest. The methods of an earlier world are not in
+the module: a call in one is an error. The errors of the builtin's own argument checks are the
+C runtime's.
+"""
+function invoke_in_world_module(world, f::F, args::Vararg{Any,N}) where {F,N}
+    @inline
+    world isa UInt || throw_builtin_type_error(:invoke_in_world, UInt, world)
+    world >= Base.tls_world_age() || throw_earlier_world()
+    return f(args...)
+end
+invoke_in_world_module() = throw_argument_error("invoke_in_world: too few arguments (expected 2)")
+invoke_in_world_module(world) = throw_argument_error("invoke_in_world: too few arguments (expected 2)")
+
+@noinline throw_earlier_world() =
+    throw(ErrorException("invoke_in_world: a world earlier than the module's (a module has the methods of the one world its code was compiled in)"))
+
 "`jl_n_threads_per_pool`: as natively with `-t 1`, the interactive pool (0) empty, the default one (1) the one thread."
 const N_THREADS_PER_POOL = Cint[0, 1]
 

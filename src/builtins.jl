@@ -264,6 +264,12 @@ function get_field(fc::FnCtx, x::CGVal, i::Int)
         push_val!(fc, x)
         emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS)
         return pop_val!(fc, Symbol)
+    elseif T === Core.CodeInstance && fieldname(T, i) in CODE_INSTANCE_FIELDS
+        # (the fields are fixed in the module; an ordering argument, `@atomic ci.min_world`,
+        # is not checked, as of no `getfield` here)
+        push_val!(fc, x)
+        emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS + findfirst(==(fieldname(T, i)), CODE_INSTANCE_FIELDS) - 1)
+        return pop_val!(fc, FT)
     elseif is_memory_type(T)
         name = fieldname(T, i)
         name === :ptr && return memory_ptr!(fc, x, FT)
@@ -643,7 +649,7 @@ end
 function emit_isdefined!(fc::FnCtx, x::CGVal, i::Int)
     T = x.typ
     any(R -> T === R, OPAQUE_RUNTIME_TYPES) &&
-        unsupported("isdefined on a field of the runtime object type ", T, " (serialized with its header only)")
+        unsupported("isdefined on a field of the runtime object type ", T, " (serialized without its fields)")
     l = layout(fc, T)
     # (natively a field constructors cannot leave out is defined; one they may is defined
     # where its pointer, or an inline value's first pointer, is not null: `undef_leaf`)

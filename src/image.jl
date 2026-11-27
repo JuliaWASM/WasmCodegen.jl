@@ -428,6 +428,8 @@ function new_object_global!(img::Image, @nospecialize(x))
         return g
     elseif T === Core.SimpleVector
         return tuple_array_global!(img, x, l)
+    elseif T === Core.CodeInstance
+        return code_instance_global!(img, x)
     elseif any(R -> T === R, OPAQUE_RUNTIME_TYPES)
         # an object the program holds but does not read (a CodeInstance kept in a build
         # record): the header only, so that `===` and `typeof` work; a field read of it is
@@ -1026,6 +1028,20 @@ end
 # runtime objects serialized with their header only (modules are named objects, above): a
 # `GlobalRef`'s binding too (whose `globalref` refers back to it)
 const OPAQUE_RUNTIME_TYPES = Any[Core.CodeInstance, Core.MethodInstance, Method, Core.Binding]
+
+# a CodeInstance: the header and the worlds it is valid in, as of the build (see
+# `code_instance_type!`)
+function code_instance_global!(img::Image, ci::Core.CodeInstance)
+    ts = types(img)
+    st = code_instance_type!(ts)
+    init = Inst[Inst(:i32_const, typeid!(ts, Core.CodeInstance)), header_hash(img, ci),
+                Inst(:i64_const, reinterpret(Int64, UInt64(@atomic ci.min_world))),
+                Inst(:i64_const, reinterpret(Int64, UInt64(@atomic ci.max_world))),
+                Inst(:struct_new, st)]
+    g = add_global!(img.cgm.mod, global_name(img, ci), RefType(st, false), false, init)
+    img.globals[ci] = g
+    return g
+end
 
 function opaque_object_global!(img::Image, @nospecialize(x))
     ts = types(img)

@@ -264,6 +264,7 @@ function compute_layout(ts::Types, @nospecialize(T))
     is_inline_tuple(T) && return immutable_layout(ts, T)
     is_vararg_tuple(T) && return tuple_array_layout(ts, T, vararg_eltype(T))
     (T === Core.TypeName || T === Module) && return boxed_layout(ts, T, named_object_type!(ts))
+    T === Core.CodeInstance && return boxed_layout(ts, T, code_instance_type!(ts))
     # a SimpleVector (a type's parameters): its elements in an array, as a large tuple's
     T === Core.SimpleVector && return tuple_array_layout(ts, T, Any)
     if !(T isa DataType) || !isconcretetype(T) || any(R -> T === R, RUNTIME_TYPES)
@@ -497,6 +498,26 @@ function named_object_type!(ts::Types)
                   final=true, super=ts.jlvalue)
     end
 end
+
+"""
+    code_instance_type!(ts) -> TypeRef
+
+The Wasm struct type of `Core.CodeInstance` objects: the header and the range of worlds the code
+is valid in (`min_world`, `max_world`), as of the build (`code_instance_global!`), the only
+fields of one a program reads here. (A module has one world, the one its code was compiled in,
+so a program that checks a build's validity, as SynchJulia's executables do, finds it valid
+when it is in that world.)
+"""
+function code_instance_type!(ts::Types)
+    get!(ts.boxes, :codeinstance) do
+        add_type!(ts.mod, StructType([FieldType(I32, false), FieldType(I32, true),
+                                       FieldType(I64, false), FieldType(I64, false)]);
+                  final=true, super=ts.jlvalue)
+    end
+end
+
+"The fields of `Core.CodeInstance` objects that `code_instance_type!` holds, in its order."
+const CODE_INSTANCE_FIELDS = (:min_world, :max_world)
 
 "The field of the array of the objects of `Memory`, `String` and `Symbol`."
 const DATA_FIELD = HEADER_FIELDS
