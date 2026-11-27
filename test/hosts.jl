@@ -159,3 +159,17 @@ end
                                                        config=WasmCodegen.Config(host=:wasi))
     end
 end
+
+# the time of day as `Libc.TimeVal()` (what `Dates.now()` reads): from the host's `clock_now`, as
+# `time()`, on both hosts (a module for JavaScript has no WASI clock)
+host_timeval() = (tv = Libc.TimeVal(); t = time(); (tv.sec > 1_700_000_000, 0 <= tv.usec < 1_000_000, abs(tv.sec + tv.usec / 1e6 - t) < 5))
+host_now_year() = Libc.TmStruct(Float64(Libc.TimeVal().sec)).year + 1900 >= 2026
+@testset "time of day (TimeVal)" begin
+    for host in (:js, :wasi)
+        cfg = WasmCodegen.Config(; host)
+        tv = WasmCodegen.compile(host_timeval, (); config=cfg)
+        @test imported_names(tv) == (host === :js ? ["clock_now"] : ["clock_time_get"])
+        @test wasm_run(tv, "host_timeval"; rettype=Tuple{Bool,Bool,Bool}) == (true, true, true)
+        @test wasm_run(WasmCodegen.compile(host_now_year, (); config=cfg), "host_now_year"; rettype=Bool)
+    end
+end
