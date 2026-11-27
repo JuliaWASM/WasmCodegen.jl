@@ -356,6 +356,25 @@ end
 "`Base.JLOptions()`: the build process's options (a program compiled into a module runs with the options it was built with)."
 @wasm_method Base.JLOptions() = BUILD_JLOPTIONS[]
 
+"""
+    invoke_in_world_module(world, f, args...; kwargs...)
+
+What a module compiles for `Base.invoke_in_world` (the builtin `Core.invoke_in_world`, or
+`Core._call_in_world` before Julia 1.13), which inference replaces by this (see
+`CC.abstract_call_known(::WasmInterpreter, ...)`): a module has one world, the one its code was
+compiled in (`Base.get_world_counter()` and `Base.tls_world_age()` are that world here), so a call
+in it is a direct call. The methods of another world are not in the module: a call in one is an
+error.
+"""
+function invoke_in_world_module(world::UInt, f::F, args::Vararg{Any,N}; kwargs...) where {F,N}
+    @inline
+    world == Base.tls_world_age() || throw_other_world()
+    return f(args...; kwargs...)
+end
+
+@noinline throw_other_world() =
+    throw(ErrorException("invoke_in_world: a world other than the module's (a module has the one world its code was compiled in)"))
+
 "`jl_n_threads_per_pool`: as natively with `-t 1`, the interactive pool (0) empty, the default one (1) the one thread."
 const N_THREADS_PER_POOL = Cint[0, 1]
 

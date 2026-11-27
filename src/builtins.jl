@@ -264,6 +264,12 @@ function get_field(fc::FnCtx, x::CGVal, i::Int)
         push_val!(fc, x)
         emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS)
         return pop_val!(fc, Symbol)
+    elseif T === Core.CodeInstance && fieldname(T, i) in CODE_INSTANCE_FIELDS
+        # (an ordering argument, `@atomic ci.min_world`, is no matter here: the fields are
+        # fixed in the module)
+        push_val!(fc, x)
+        emit!(fc.b, :struct_get, l.wtype, HEADER_FIELDS + findfirst(==(fieldname(T, i)), CODE_INSTANCE_FIELDS) - 1)
+        return pop_val!(fc, FT)
     elseif is_memory_type(T)
         name = fieldname(T, i)
         name === :ptr && return memory_ptr!(fc, x, FT)
