@@ -308,37 +308,26 @@ function invokelatest_binding_in_world(m::Module, s::Symbol)
     return g.name === :invokelatest && Base.binding_module(g.mod, g.name) === Base
 end
 
-# The builtin that calls a function in a world: `Core.invoke_in_world` (Julia 1.13, of which
-# `Base.invoke_in_world` is a constant), `Core._call_in_world` before (which `Base.invoke_in_world`
-# calls). A module has one world, so a call in a world is a direct call,
-# `Runtime.invoke_in_world_module` (which checks that the world is the module's). Every read of the
-# builtin, by any binding or as `getproperty(Base, :invoke_in_world)`, is inferred as that function,
-# and is replaced by it before the optimizer (as `Base.invokelatest` by `invokelatest_trimmed`, above).
-const INVOKE_IN_WORLD = isdefined(Core, :invoke_in_world) ? getglobal(Core, :invoke_in_world) : Core._call_in_world
-is_invoke_in_world(@nospecialize(rt)) = rt isa CC.Const && rt.val === INVOKE_IN_WORLD
-const INVOKE_IN_WORLD_MODULE = CC.Const(Runtime.invoke_in_world_module)
+# `Core.invoke_in_world(world, f, args...)`, the builtin that calls a function in a world (of which
+# `Base.invoke_in_world` is a constant). A module has one world, so a call of the builtin is
+# inferred as the call of `Runtime.invoke_in_world_module`, a direct call of `f` (which checks the
+# world), and the callee of the call is replaced by that function before the optimizer. Only a
+# call is: the builtin as a value (`Base.invoke_in_world isa Core.Builtin`, an argument that
+# dispatches on its type) is the builtin. (So a call of it that inference does not see as one is
+# unsupported, as before: by a value of unknown type, as the operator of `modifyfield!`, by a
+# splat of a splat.)
+is_invoke_in_world(@nospecialize(x), src::Core.CodeInfo, sptypes::Vector{CC.VarState}) =
+    CC.singleton_type(CC.argextype(x, src, sptypes)) === Core.invoke_in_world
 
 function direct_invoke_in_world!(opt::CC.OptimizationState)
     src = opt.src
-    direct = Runtime.invoke_in_world_module
-    builtin(x) = (x isa GlobalRef || x === INVOKE_IN_WORLD) &&
-                 is_invoke_in_world(CC.argextype(x, src, opt.sptypes))
-    function binding_read(x)
-        Meta.isexpr(x, :call) && length(x.args) == 3 || return false
-        f = CC.singleton_type(CC.argextype(x.args[1], src, opt.sptypes))
-        (f === getglobal || f === getproperty) || return false
-        m, s = (CC.argextype(a, src, opt.sptypes) for a in x.args[2:3])
-        (m isa CC.Const && m.val isa Module && s isa CC.Const && s.val isa Symbol) || return false
-        return isdefinedglobal(m.val, s.val) && getglobal(m.val, s.val) === INVOKE_IN_WORLD
-    end
-    for (i, stmt) in enumerate(src.code)
-        (builtin(stmt) || binding_read(stmt)) && (src.code[i] = stmt = direct)
-        Meta.isexpr(stmt, :(=)) && (builtin(stmt.args[2]) || binding_read(stmt.args[2])) && (stmt.args[2] = direct)
+    for stmt in src.code
         call = Meta.isexpr(stmt, :(=)) ? stmt.args[2] : stmt
         Meta.isexpr(call, :call) || continue
-        for j in 1:length(call.args)
-            builtin(call.args[j]) && (call.args[j] = direct)
-        end
+        # (the callee, or what a call with splatted arguments, `Core._apply_iterate(iterate, f, ...)`, calls)
+        j = CC.singleton_type(CC.argextype(call.args[1], src, opt.sptypes)) === Core._apply_iterate ? 3 : 1
+        length(call.args) >= j && is_invoke_in_world(call.args[j], src, opt.sptypes) &&
+            (call.args[j] = Runtime.invoke_in_world_module)
     end
     return nothing
 end
@@ -347,7 +336,6 @@ function CC.abstract_eval_globalref(interp::WasmInterpreter, g::GlobalRef, saw_l
                                     sv::CC.AbsIntState)
     ret = @invoke CC.abstract_eval_globalref(interp::CC.AbstractInterpreter, g::GlobalRef,
                                              saw_latestworld::Bool, sv::CC.AbsIntState)
-    is_invoke_in_world(ret.rt) && return CC.RTEffects(INVOKE_IN_WORLD_MODULE, ret.exct, ret.effects, ret.refinements)
     direct = direct_invokelatest(interp)
     (direct !== nothing && ret.rt isa CC.Const && ret.rt.val === Core.invokelatest &&
      invokelatest_binding(g.mod, g.name, CC.get_inference_world(interp))) || return ret
@@ -369,16 +357,11 @@ function CC.abstract_call_known(interp::WasmInterpreter, @nospecialize(f),
             return CC.Future{CC.CallMeta}(CC.CallMeta(CC.Const(direct), Union{}, CC.EFFECTS_TOTAL, CC.NoCallInfo()))
         end
     end
-    if (f === getproperty || f === getglobal) && length(arginfo.argtypes) == 3
-        m, s = arginfo.argtypes[2], arginfo.argtypes[3]
-        if m isa CC.Const && m.val isa Module && s isa CC.Const && s.val isa Symbol &&
-                isdefinedglobal(m.val, s.val) && getglobal(m.val, s.val) === INVOKE_IN_WORLD
-            return CC.Future{CC.CallMeta}(CC.CallMeta(INVOKE_IN_WORLD_MODULE, Union{}, CC.EFFECTS_TOTAL, CC.NoCallInfo()))
-        end
-    end
-    # (the builtin itself as the callee, a constant in the code)
-    f === INVOKE_IN_WORLD &&
-        return CC.abstract_call(interp, CC.ArgInfo(nothing, Any[INVOKE_IN_WORLD_MODULE; arginfo.argtypes[2:end]]), si, sv, max_methods)
+    # (a call of the builtin `Core.invoke_in_world`: of `Runtime.invoke_in_world_module`, see
+    # `direct_invoke_in_world!`)
+    f === Core.invoke_in_world &&
+        return CC.abstract_call(interp, CC.ArgInfo(nothing, Any[CC.Const(Runtime.invoke_in_world_module); arginfo.argtypes[2:end]]),
+                                si, sv, max_methods)
     return @invoke CC.abstract_call_known(interp::CC.AbstractInterpreter, f::Any,
                                           arginfo::CC.ArgInfo, si::CC.StmtInfo,
                                           sv::CC.InferenceState, max_methods::Int)
